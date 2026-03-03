@@ -119,23 +119,23 @@ class Inline:
         ])
 
     def start_key(self, lang: dict, private: bool = False) -> types.InlineKeyboardMarkup:
-    return self.ikm([
-        [
-            self.ikb(
-                text=f"+ {lang['add_me']}",
-                url=f"https://t.me/{app.username}?startgroup=true",
-                style=ButtonStyle.SUCCESS
-            )
-        ],
-        [
-            self._btn(lang["help"], "help", ButtonStyle.PRIMARY),
-            self._btn(lang["language"], "language"),
-        ],
-        [
-            self.ikb(text=lang["support"], url=config.SUPPORT_CHAT),
-            self.ikb(text=lang["channel"], url=config.SUPPORT_CHANNEL),
-        ],
-    ])
+        return self.ikm([
+            [
+                self.ikb(
+                    text=f"+ {lang['add_me']}",
+                    url=f"https://t.me/{app.username}?startgroup=true",
+                    style=ButtonStyle.SUCCESS
+                )
+            ],
+            [
+                self._btn(lang["help"], "help", ButtonStyle.PRIMARY),
+                self._btn(lang["language"], "language"),
+            ],
+            [
+                self.ikb(text=lang["support"], url=config.SUPPORT_CHAT),
+                self.ikb(text=lang["channel"], url=config.SUPPORT_CHANNEL),
+            ],
+        ])
 
     def yt_key(self, link: str) -> types.InlineKeyboardMarkup:
         return self.ikm([[
