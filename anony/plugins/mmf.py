@@ -10,7 +10,7 @@ import time
 import subprocess
 import tempfile
 
-FONT_PATH = "./anony/helpers/Railway_Bold.ttf"
+FONT_PATH = "./anony/helpers/Raleway-Bold.ttf"
 
 font_cache = {}
 recent_memes = {}
