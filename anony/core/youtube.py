@@ -154,19 +154,24 @@ class YouTube:
             return cached
 
         if not video:
-            if not config.API_URL or not config.API_KEY:
+            if not self.fallen.configured:
                 logger.warning(
-                    "FallenApi skipped for %s: %s is not set in config.",
+                    "FallenApi is not configured — audio download for %s will fail. "
+                    "Set API_URL and API_KEY in your config.",
                     video_id,
-                    "API_URL" if not config.API_URL else "API_KEY",
                 )
-            else:
-                logger.info("Trying FallenApi for %s...", video_id)
-                path = await self.fallen.download_track(self.base + video_id)
-                if path:
-                    logger.info("FallenApi OK: %s", path)
-                    return path
-                logger.warning("FallenApi failed for %s; falling back to yt-dlp.", video_id)
+                return None
+
+            path = await self.fallen.download_track(self.base + video_id)
+            if path:
+                return path
+
+            logger.warning(
+                "FallenApi returned nothing for %s. "
+                "Check logs above for the exact API response.",
+                video_id,
+            )
+            return None
 
         cookie = self.get_cookies()
         opts = self._build_opts(video, cookie)
@@ -174,16 +179,9 @@ class YouTube:
         has_po = bool(opts["extractor_args"]["youtube"].get("po_token"))
 
         logger.info(
-            "yt-dlp: %s | cookie=%s | po_token=%s | clients=%s",
+            "yt-dlp (video): %s | cookie=%s | po_token=%s | clients=%s",
             video_id, bool(cookie), has_po, clients,
         )
-        if not cookie and not has_po:
-            logger.warning(
-                "No cookies and no PO_TOKEN set. YouTube will likely reject this request. "
-                "Add cookies to %s or set PO_TOKEN in config. "
-                "See: https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide",
-                self.cookie_dir,
-            )
 
         def _run() -> str | None:
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -197,8 +195,10 @@ class YouTube:
                 except yt_dlp.utils.ExtractorError as e:
                     logger.warning("yt-dlp extractor error: %s", e)
                     return None
+            ext = "mp4"
             result = self._cached(video_id, video)
-            return result or (str(self.download_dir / f"{video_id}.{'mp4' if video else 'webm'}") if Path(self.download_dir / f"{video_id}.{'mp4' if video else 'webm'}").is_file() else None)
+            expected = self.download_dir / f"{video_id}.{ext}"
+            return result or (str(expected) if expected.is_file() else None)
 
         return await asyncio.to_thread(_run)
 
