@@ -1,65 +1,45 @@
 import os
 import requests
-from PIL import Image
 from pyrogram import filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from anony import app
 
 
-def upload_to_telegraph(path):
-    with open(path, "rb") as f:
-        r = requests.post(
-            "https://telegra.ph/upload",
-            files={"file": ("image.jpg", f, "image/jpeg")},
-        )
+@app.on_message(filters.command(["catbox", "upload", "tgm"]))
+async def catbox_upload(_, m):
 
-    if r.status_code == 200:
-        data = r.json()
-        if isinstance(data, list) and "src" in data[0]:
-            return True, "https://telegra.ph" + data[0]["src"]
+    if not m.reply_to_message:
+        return await m.reply("Reply to any file (Max 200MB).")
 
-    return False, f"Telegraph Error {r.status_code}: {r.text}"
-
-
-@app.on_message(filters.command(["tgm", "telegraph"]))
-async def telegraph_uploader(client, message):
-
-    if not message.reply_to_message or not message.reply_to_message.photo:
-        return await message.reply("❍ Reply to a photo (max 5MB).")
-
-    msg = await message.reply("❍ Processing...")
+    msg = await m.reply("Uploading...")
 
     try:
-        # Download original
-        original = await message.reply_to_message.download()
+        path = await m.reply_to_message.download()
 
-        # Force clean re-encode
-        img = Image.open(original).convert("RGB")
+        if os.path.getsize(path) > 200 * 1024 * 1024:
+            os.remove(path)
+            return await msg.edit("File must be under 200MB.")
 
-        clean_path = "clean_image.jpg"
-        img.save(clean_path, "JPEG", quality=90, optimize=True)
+        with open(path, "rb") as f:
+            r = requests.post(
+                "https://catbox.moe/user/api.php",
+                data={"reqtype": "fileupload"},
+                files={"fileToUpload": f},
+            )
 
-        os.remove(original)
+        os.remove(path)
 
-        # Check size
-        if os.path.getsize(clean_path) > 5 * 1024 * 1024:
-            os.remove(clean_path)
-            return await msg.edit("❍ Image exceeds 5MB after processing.")
-
-        success, result = upload_to_telegraph(clean_path)
-
-        if success:
+        if r.status_code == 200:
+            link = r.text.strip()
             await msg.edit_text(
-                f"❍ | [Open Link]({result})",
+                f"[Open Link]({link})",
                 disable_web_page_preview=True,
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("❍ Open Telegraph ❍", url=result)]]
+                    [[InlineKeyboardButton("Open Catbox", url=link)]]
                 ),
             )
         else:
-            await msg.edit(result)
-
-        os.remove(clean_path)
+            await msg.edit(f"Upload failed\n{r.status_code}")
 
     except Exception as e:
-        await msg.edit(f"❍ Error:\n{e}")
+        await msg.edit(str(e))
