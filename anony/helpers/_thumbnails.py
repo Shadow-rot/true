@@ -1,3 +1,7 @@
+# Copyright (c) 2025 AnonymousX1025
+# Licensed under the MIT License.
+# This file is part of AnonXMusic
+
 import os
 import math
 import random
@@ -12,20 +16,20 @@ class Thumbnail:
         self.W, self.H = 1280, 720
 
         try:
-            self.f_title  = ImageFont.truetype("anony/helpers/Raleway-Bold.ttf", 52)
-            self.f_sub    = ImageFont.truetype("anony/helpers/Inter-Light.ttf", 27)
-            self.f_small  = ImageFont.truetype("anony/helpers/Inter-Light.ttf", 19)
-            self.f_tiny   = ImageFont.truetype("anony/helpers/Inter-Light.ttf", 15)
-            self.f_stat   = ImageFont.truetype("anony/helpers/Raleway-Bold.ttf", 22)
-            self.f_badge  = ImageFont.truetype("anony/helpers/Raleway-Bold.ttf", 14)
-            self.f_rbi    = ImageFont.truetype("anony/helpers/Raleway-Bold.ttf", 12)
-        except:
-            self.f_title = self.f_sub = self.f_small = self.f_tiny = \
-            self.f_stat  = self.f_badge = self.f_rbi = ImageFont.load_default()
+            self.f_h1    = ImageFont.truetype("anony/helpers/Raleway-Bold.ttf",   48)
+            self.f_sub   = ImageFont.truetype("anony/helpers/Inter-Light.ttf",    25)
+            self.f_body  = ImageFont.truetype("anony/helpers/Inter-Light.ttf",    19)
+            self.f_small = ImageFont.truetype("anony/helpers/Inter-Light.ttf",    16)
+            self.f_micro = ImageFont.truetype("anony/helpers/Inter-Light.ttf",    13)
+            self.f_badge = ImageFont.truetype("anony/helpers/Raleway-Bold.ttf",   13)
+            self.f_stat  = ImageFont.truetype("anony/helpers/Raleway-Bold.ttf",   19)
+        except Exception:
+            self.f_h1 = self.f_sub = self.f_body = self.f_small = \
+            self.f_micro = self.f_badge = self.f_stat = ImageFont.load_default()
 
     # ── Helpers ────────────────────────────────────────────────────────────
 
-    def tsize(self, text, font):
+    def ts(self, text, font):
         bb = font.getbbox(text)
         return bb[2] - bb[0], bb[3] - bb[1]
 
@@ -33,7 +37,7 @@ class Thumbnail:
         words, lines, cur = text.split(), [], ""
         for word in words:
             test = (cur + " " + word).strip()
-            if self.tsize(test, font)[0] <= max_w:
+            if self.ts(test, font)[0] <= max_w:
                 cur = test
             else:
                 lines.append(cur)
@@ -51,81 +55,175 @@ class Thumbnail:
         cy     = (nh - th) // 2
         return img.crop((cx, cy, cx + tw, cy + th))
 
-    def radial_glow(self, canvas, cx, cy, r, color, max_alpha=50):
-        g = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-        d = ImageDraw.Draw(g)
-        for i in range(16, 0, -1):
-            t  = i / 16
-            sp = int(r * t)
-            a  = int(max_alpha * (1 - t) ** 0.5)
-            d.ellipse([cx - sp, cy - sp, cx + sp, cy + sp], fill=(*color, a))
-        g = g.filter(ImageFilter.GaussianBlur(45))
-        canvas.alpha_composite(g)
-
-    def add_card_shadow(self, canvas, x, y, w, h, radius=32):
-        for i in range(8, 0, -1):
-            sh = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-            e  = i * 6
-            ImageDraw.Draw(sh).rounded_rectangle(
-                [x - e, y + e * 0.7, x + w + e, y + h + e * 0.7],
-                radius=radius + e // 2, fill=(180, 100, 60, 18)
-            )
-            sh = sh.filter(ImageFilter.GaussianBlur(i * 4))
-            canvas.alpha_composite(sh)
-
-    def paste_rounded(self, canvas, img, pos, radius=22):
+    def paste_rounded(self, canvas, img, pos, radius=20):
         mask = Image.new("L", img.size, 0)
-        ImageDraw.Draw(mask).rounded_rectangle([0, 0, img.width, img.height], radius=radius, fill=255)
+        ImageDraw.Draw(mask).rounded_rectangle(
+            [0, 0, img.width, img.height], radius=radius, fill=255
+        )
         layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
         layer.paste(img.convert("RGBA"), pos, mask=mask)
         canvas.alpha_composite(layer)
 
-    def draw_eq_bars(self, canvas, cx, base_y):
-        heights = [18, 32, 52, 28, 46, 60, 36, 54, 24, 42, 64, 30, 48, 40, 20, 56, 32, 16, 44, 50]
-        bw, gap  = 10, 6
-        total    = len(heights) * (bw + gap) - gap
-        sx       = cx - total // 2
+    def bloom(self, canvas, cx, cy, r, color, alpha=55):
+        g = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        d = ImageDraw.Draw(g)
+        for i in range(22, 0, -1):
+            t  = i / 22
+            sp = int(r * t)
+            a  = int(alpha * (1 - t) ** 0.38)
+            d.ellipse([cx - sp, cy - sp, cx + sp, cy + sp], fill=(*color, a))
+        g = g.filter(ImageFilter.GaussianBlur(60))
+        canvas.alpha_composite(g)
 
-        layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-        d     = ImageDraw.Draw(layer)
-        for i, bar_h in enumerate(heights):
+    def draw_card_shadow(self, canvas, cx0, cy0, cw, ch):
+        for spread, oy_f, alpha in [(40, 0.9, 10), (22, 0.6, 14), (10, 0.35, 20)]:
+            sh = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+            e  = spread
+            oy = int(e * oy_f)
+            ImageDraw.Draw(sh).rounded_rectangle(
+                [cx0 - e, cy0 + oy, cx0 + cw + e, cy0 + ch + oy],
+                radius=32 + e // 2, fill=(120, 90, 55, alpha)
+            )
+            sh = sh.filter(ImageFilter.GaussianBlur(spread // 2 + 5))
+            canvas.alpha_composite(sh)
+
+    def draw_card(self, canvas, cx0, cy0, cw, ch):
+        # Glass body
+        c = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        ImageDraw.Draw(c).rounded_rectangle(
+            [cx0, cy0, cx0 + cw, cy0 + ch], radius=28, fill=(252, 248, 242, 198)
+        )
+        canvas.alpha_composite(c)
+        # Inner softness
+        i = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        ImageDraw.Draw(i).rounded_rectangle(
+            [cx0 + 3, cy0 + 3, cx0 + cw - 3, cy0 + ch - 3],
+            radius=25, fill=(255, 255, 252, 18)
+        )
+        canvas.alpha_composite(i)
+        # 1px white border 15%
+        b = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        ImageDraw.Draw(b).rounded_rectangle(
+            [cx0, cy0, cx0 + cw, cy0 + ch],
+            radius=28, outline=(255, 255, 255, 38), width=1
+        )
+        canvas.alpha_composite(b)
+        # Top reflection highlight
+        for ri in range(20):
+            t  = ri / 20
+            a  = int(105 * (1 - t) ** 2.2)
+            rl = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+            ImageDraw.Draw(rl).rounded_rectangle(
+                [cx0 + ri, cy0 + ri, cx0 + cw - ri, cy0 + 38],
+                radius=28 - ri, fill=(255, 255, 255, a)
+            )
+            canvas.alpha_composite(rl)
+
+    def draw_sufi_art(self, canvas, ax, ay, art_size, raw_thumb):
+        ART = art_size
+        # Cover-crop real thumbnail
+        art_img = self.cover_crop(raw_thumb, ART, ART)
+        art_img = ImageEnhance.Contrast(art_img).enhance(0.88)
+        art_img = ImageEnhance.Brightness(art_img).enhance(0.82)
+        art_img = ImageEnhance.Color(art_img).enhance(0.7)
+
+        # Overlay the sufi geometric pattern on top of the thumbnail
+        overlay = Image.new("RGBA", (ART, ART), (0, 0, 0, 0))
+        od      = ImageDraw.Draw(overlay)
+        acx, acy = ART // 2, ART // 2
+
+        # Warm semi-transparent tint layer
+        od.rectangle([0, 0, ART, ART], fill=(160, 100, 50, 80))
+
+        # Concentric rings
+        for ri, rv in [(110, 40), (82, 60), (54, 88), (30, 120)]:
+            od.ellipse([acx - ri, acy - ri, acx + ri, acy + ri],
+                       outline=(255, 220, 150, rv), width=1)
+        # 8-point star
+        for angle_off in [0, 45]:
+            pts = []
+            for a in range(8):
+                ang = math.radians(a * 45 + angle_off)
+                r2  = 88 if a % 2 == 0 else 58
+                pts.append((acx + math.cos(ang) * r2, acy + math.sin(ang) * r2))
+            od.polygon(pts, outline=(255, 215, 140, 60))
+        # Radial spokes
+        for deg in range(0, 360, 22):
+            rad = math.radians(deg)
+            od.line([
+                (acx + math.cos(rad) * 30, acy + math.sin(rad) * 30),
+                (acx + math.cos(rad) * 105, acy + math.sin(rad) * 105)
+            ], fill=(255, 220, 150, 38), width=1)
+        # Center glow
+        for gi in range(10, 0, -1):
+            od.ellipse([acx - gi * 4, acy - gi * 4, acx + gi * 4, acy + gi * 4],
+                       fill=(255, 235, 175, 28 - gi * 2))
+        od.ellipse([acx - 8, acy - 8, acx + 8, acy + 8], fill=(255, 240, 200, 160))
+
+        # Merge thumbnail + overlay
+        base = art_img.convert("RGBA")
+        base.alpha_composite(overlay)
+
+        self.paste_rounded(canvas, base, (ax, ay), radius=20)
+
+        # 1px white border on artwork
+        ab = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        ImageDraw.Draw(ab).rounded_rectangle(
+            [ax, ay, ax + ART, ay + ART],
+            radius=20, outline=(255, 255, 255, 75), width=1
+        )
+        canvas.alpha_composite(ab)
+
+    def draw_eq_bars(self, canvas, eq_cx, eq_base):
+        half_h  = [16, 28, 46, 24, 42, 56, 32, 50, 20, 38, 60, 26, 44, 36, 16, 52, 28, 12, 40, 48]
+        heights = half_h + half_h[::-1]
+        bw, gap = 7, 5
+        total   = len(heights) * (bw + gap) - gap
+        sx      = eq_cx - total // 2
+
+        eq_l = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        eqd  = ImageDraw.Draw(eq_l)
+        for i, bh in enumerate(heights):
             bx = sx + i * (bw + gap)
-            for row in range(bar_h):
-                t  = row / bar_h
-                rc = int(210 - t * 60)
-                gc = int(100 - t * 40)
-                bc = int(50  - t * 20)
-                ac = int(210 - t * 90)
-                d.rectangle([bx, base_y - bar_h + row, bx + bw, base_y - bar_h + row + 1],
-                             fill=(rc, gc, bc, ac))
-            d.ellipse([bx - 1, base_y - bar_h - 4, bx + bw + 1, base_y - bar_h + bw - 4],
-                      fill=(220, 110, 55, 200))
+            for row in range(bh):
+                t  = row / bh
+                rc = int(180 + t * 55)
+                gc = int(88  + t * 102)
+                bc = int(38  + t * 102)
+                ac = int(225 - t * 90)
+                eqd.rectangle(
+                    [bx, eq_base - bh + row, bx + bw, eq_base - bh + row + 1],
+                    fill=(rc, gc, bc, ac)
+                )
+            eqd.ellipse(
+                [bx - 1, eq_base - bh - 3, bx + bw + 1, eq_base - bh + bw - 3],
+                fill=(215, 125, 55, 180)
+            )
 
-        glow = layer.filter(ImageFilter.GaussianBlur(3))
+        glow = eq_l.filter(ImageFilter.GaussianBlur(3.5))
         canvas.alpha_composite(glow)
-        canvas.alpha_composite(layer)
+        canvas.alpha_composite(eq_l)
 
-    def draw_progress(self, canvas, bar_x, bar_y, bar_w, duration):
-        W, H = canvas.size
-        pb   = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        pd   = ImageDraw.Draw(pb)
-
-        pd.rounded_rectangle([bar_x, bar_y, bar_x + bar_w, bar_y + 4],
-                              radius=2, fill=(200, 165, 140, 160))
-        dx, my = bar_x, bar_y + 2
-        for gr, a in [(20, 40), (13, 80), (8, 180)]:
-            pd.ellipse([dx - gr, my - gr, dx + gr, my + gr], fill=(210, 100, 50, a))
-        pd.ellipse([dx - 6, my - 6, dx + 6, my + 6], fill=(255, 255, 255, 255))
-        pd.ellipse([dx - 3, my - 3, dx + 3, my + 3], fill=(210, 100, 50, 255))
-
+    def draw_progress(self, canvas, bx0, by0, bwid, duration):
+        pb  = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        pbd = ImageDraw.Draw(pb)
+        pbd.rounded_rectangle(
+            [bx0, by0, bx0 + bwid, by0 + 3],
+            radius=2, fill=(200, 175, 148, 120)
+        )
+        dx, my = bx0, by0 + 1
+        for gr, a in [(22, 18), (15, 42), (9, 100), (6, 185)]:
+            pbd.ellipse([dx - gr, my - gr, dx + gr, my + gr], fill=(199, 107, 58, a))
+        pbd.ellipse([dx - 5, my - 5, dx + 5, my + 5], fill=(252, 248, 242, 255))
+        pbd.ellipse([dx - 2, my - 2, dx + 2, my + 2], fill=(199, 107, 58, 255))
         canvas.alpha_composite(pb)
 
         draw = ImageDraw.Draw(canvas)
-        draw.text((bar_x, bar_y + 12), "0:00",
-                  font=self.f_small, fill=(140, 100, 70, 200))
-        dw, _ = self.tsize(duration, self.f_small)
-        draw.text((bar_x + bar_w - dw, bar_y + 12), duration,
-                  font=self.f_small, fill=(140, 100, 70, 200))
+        draw.text((bx0, by0 + 10), "0:00",
+                  font=self.f_small, fill=(148, 118, 88, 185))
+        dw, _ = self.ts(duration, self.f_small)
+        draw.text((bx0 + bwid - dw, by0 + 10), duration,
+                  font=self.f_small, fill=(148, 118, 88, 185))
 
     async def download(self, path, url):
         async with aiohttp.ClientSession() as s:
@@ -148,202 +246,249 @@ class Thumbnail:
 
             W, H = self.W, self.H
             raw  = Image.open(temp).convert("RGB")
+            random.seed(42)
 
-            # ── Background: warm skin-tone gradient ───────────────────────
-            canvas = Image.new("RGBA", (W, H), (245, 225, 210, 255))
+            # ── Background: #F4EDE4 → #E9D8C7 ────────────────────────────
+            canvas = Image.new("RGBA", (W, H), (244, 237, 228, 255))
 
             grad = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             gd   = ImageDraw.Draw(grad)
             for y in range(H):
                 t = y / H
                 gd.line([(0, y), (W, y)], fill=(
-                    int(250 - t * 18),
-                    int(228 - t * 22),
-                    int(215 - t * 25), 255
+                    int(244 - t * 11),
+                    int(237 - t * 21),
+                    int(228 - t * 27), 255
                 ))
             canvas.alpha_composite(grad)
 
-            # Diagonal warm tint
-            diag = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-            dd   = ImageDraw.Draw(diag)
+            # Horizontal warmth
+            warm = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            wd   = ImageDraw.Draw(warm)
             for x in range(W):
-                dd.line([(x, 0), (x, H)], fill=(200, 140, 100, int(30 * x / W)))
-            canvas.alpha_composite(diag)
+                wd.line([(x, 0), (x, H)], fill=(210, 150, 90, int(12 * x / W)))
+            canvas.alpha_composite(warm)
 
-            # Noise texture
-            random.seed(42)
+            # Grain 2–3%
             noise = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             nd    = noise.load()
             for y in range(H):
                 for x in range(W):
                     v = random.randint(0, 255)
-                    nd[x, y] = (v, v // 2, 0, random.randint(0, 6))
+                    nd[x, y] = (v, int(v * 0.72), int(v * 0.44), random.randint(0, 6))
             canvas.alpha_composite(noise)
 
-            # Radial glows
-            self.radial_glow(canvas, 230, 360, 380, (255, 180, 140), max_alpha=70)
-            self.radial_glow(canvas, 850, 320, 420, (255, 210, 180), max_alpha=55)
-            self.radial_glow(canvas, 640, 680, 280, (230, 150, 100), max_alpha=40)
+            # Corner vignette
+            vig = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            for i in range(90):
+                t = (90 - i) / 90
+                a = int(28 * t ** 2.5)
+                ImageDraw.Draw(vig).rectangle(
+                    [i, i, W - i, H - i], outline=(155, 120, 80, a), width=1
+                )
+            canvas.alpha_composite(vig)
 
-            # ── Left glass card ───────────────────────────────────────────
-            CARD_W, CARD_H = 310, 390
-            card_x = 55
-            card_y = (H - CARD_H) // 2 - 10
-            CX     = card_x + CARD_W // 2
-            CY     = card_y + CARD_H // 2
+            # Studio blooms
+            self.bloom(canvas, -80,  -60, 620, (255, 225, 170), alpha=68)
+            self.bloom(canvas,  920,  400, 500, (255, 210, 155), alpha=30)
+            self.bloom(canvas,  380,  700, 360, (220, 185, 130), alpha=22)
+            self.bloom(canvas,  860,  320, 440, (255, 218, 180), alpha=40)
 
-            self.add_card_shadow(canvas, card_x, card_y, CARD_W, CARD_H)
+            # Dust particles
+            dust = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            dd   = ImageDraw.Draw(dust)
+            for _ in range(130):
+                px = random.randint(0, W)
+                py = random.randint(0, H)
+                pr = random.uniform(0.4, 2.2)
+                pa = random.randint(6, 30)
+                v  = random.randint(210, 255)
+                dd.ellipse(
+                    [px - pr, py - pr, px + pr, py + pr],
+                    fill=(v, int(v * 0.82), int(v * 0.56), pa)
+                )
+            dust = dust.filter(ImageFilter.GaussianBlur(1.0))
+            canvas.alpha_composite(dust)
 
-            glass = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-            ImageDraw.Draw(glass).rounded_rectangle(
-                [card_x, card_y, card_x + CARD_W, card_y + CARD_H],
-                radius=28, fill=(255, 248, 242, 180)
-            )
-            canvas.alpha_composite(glass)
+            # ── Left floating card ────────────────────────────────────────
+            CW, CH = 316, 430
+            cx0    = 60
+            cy0    = (H - CH) // 2 - 10
+            CCX    = cx0 + CW // 2
 
-            border = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-            ImageDraw.Draw(border).rounded_rectangle(
-                [card_x, card_y, card_x + CARD_W, card_y + CARD_H],
-                radius=28, outline=(220, 170, 130, 120), width=1
-            )
-            canvas.alpha_composite(border)
+            self.draw_card_shadow(canvas, cx0, cy0, CW, CH)
+            self.draw_card(canvas, cx0, cy0, CW, CH)
 
-            # Top inner highlight
-            hl = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-            ImageDraw.Draw(hl).rounded_rectangle(
-                [card_x + 2, card_y + 2, card_x + CARD_W - 2, card_y + 40],
-                radius=26, fill=(255, 255, 255, 80)
-            )
-            canvas.alpha_composite(hl)
+            # Artwork with sufi overlay
+            ART = 248
+            ax  = cx0 + (CW - ART) // 2
+            ay  = cy0 + 26
+            self.draw_sufi_art(canvas, ax, ay, ART, raw)
 
-            # ── Album art inside card (cover-crop) ────────────────────────
-            ART_W, ART_H = 260, 230
-            art_x = card_x + (CARD_W - ART_W) // 2
-            art_y = card_y + 24
-
-            art = self.cover_crop(raw, ART_W, ART_H)
-            art = ImageEnhance.Contrast(art).enhance(1.08)
-            art = ImageEnhance.Sharpness(art).enhance(1.2)
-            self.paste_rounded(canvas, art, (art_x, art_y), radius=14)
-
-            # Art border
-            art_border = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-            ImageDraw.Draw(art_border).rounded_rectangle(
-                [art_x, art_y, art_x + ART_W, art_y + ART_H],
-                radius=14, outline=(220, 170, 130, 130), width=1
-            )
-            canvas.alpha_composite(art_border)
-
+            # Card micro text
             draw = ImageDraw.Draw(canvas)
 
-            # ── Card info below art ───────────────────────────────────────
-            info_y = art_y + ART_H + 18
+            song_lbl = song.title[:22] + ("…" if len(song.title) > 22 else "")
+            slw, slh = self.ts(song_lbl, self.f_micro)
+            draw.text((CCX - slw // 2, ay + ART + 14),
+                      song_lbl, font=self.f_micro, fill=(70, 48, 28, 225))
 
-            # Song title truncated
-            card_title = song.title[:28] + ("…" if len(song.title) > 28 else "")
-            ct_w, ct_h = self.tsize(card_title, self.f_tiny)
-            draw.text((card_x + (CARD_W - ct_w) // 2, info_y),
-                      card_title, font=self.f_tiny, fill=(80, 50, 30, 220))
+            art_lbl = song.channel_name[:28]
+            alw, alh = self.ts(art_lbl, self.f_micro)
+            draw.text((CCX - alw // 2, ay + ART + 14 + slh + 5),
+                      art_lbl, font=self.f_micro, fill=(130, 98, 65, 170))
 
-            # Artist
-            ca_w, ca_h = self.tsize(song.channel_name[:24], self.f_tiny)
-            draw.text((card_x + (CARD_W - ca_w) // 2, info_y + ct_h + 6),
-                      song.channel_name[:24], font=self.f_tiny, fill=(150, 100, 65, 180))
+            # Verified badge
+            vbt = "✓  Verified Artist"
+            vbw, vbh = self.ts(vbt, self.f_micro)
+            vby = ay + ART + 14 + slh + alh + 18
+            vbs = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            ImageDraw.Draw(vbs).rounded_rectangle(
+                [CCX - vbw // 2 - 12, vby + 2, CCX + vbw // 2 + 12, vby + vbh + 10],
+                radius=11, fill=(160, 120, 70, 40)
+            )
+            vbs = vbs.filter(ImageFilter.GaussianBlur(3))
+            canvas.alpha_composite(vbs)
+            vbl = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            ImageDraw.Draw(vbl).rounded_rectangle(
+                [CCX - vbw // 2 - 12, vby, CCX + vbw // 2 + 12, vby + vbh + 8],
+                radius=11, fill=(225, 195, 148, 180)
+            )
+            canvas.alpha_composite(vbl)
+            draw = ImageDraw.Draw(canvas)
+            draw.text((CCX - vbw // 2, vby + 4), vbt,
+                      font=self.f_micro, fill=(75, 48, 22, 235))
 
-            # RBI label + lock
-            rt, _ = self.tsize("RBI REGISTERED", self.f_rbi)
-            draw.text((CX - rt // 2, card_y + CARD_H - 40),
-                      "RBI REGISTERED", font=self.f_rbi, fill=(160, 100, 60, 200))
-            lk_x = CX - 7
-            lk_y = card_y + CARD_H - 24
-            draw.rounded_rectangle([lk_x, lk_y, lk_x + 14, lk_y + 10],
-                                    radius=2, fill=(180, 120, 70, 120))
-            draw.arc([lk_x + 2, lk_y - 7, lk_x + 12, lk_y + 3],
-                     start=0, end=180, fill=(180, 120, 70, 150), width=2)
-
-            # ── Right text section ────────────────────────────────────────
-            RX        = card_x + CARD_W + 70
-            RY        = 140
-            content_w = W - RX - 50
+            # ── Right content ─────────────────────────────────────────────
+            RX = cx0 + CW + 72
+            RY = 120
+            RW = W - RX - 55
 
             # NOW PLAYING badge
-            badge_txt = "NOW PLAYING"
-            bw3, bh3  = self.tsize(badge_txt, self.f_badge)
-            pad3 = 12
-            bl   = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-            ImageDraw.Draw(bl).rounded_rectangle(
-                [RX, RY, RX + bw3 + pad3 * 2, RY + bh3 + 10],
-                radius=20, fill=(210, 100, 50, 230)
+            bt       = "NOW PLAYING"
+            bw2, bh2 = self.ts(bt, self.f_badge)
+            pad      = 14
+            bsh = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            ImageDraw.Draw(bsh).rounded_rectangle(
+                [RX, RY + 3, RX + bw2 + pad * 2, RY + bh2 + 13],
+                radius=22, fill=(160, 80, 30, 50)
             )
-            canvas.alpha_composite(bl)
+            bsh = bsh.filter(ImageFilter.GaussianBlur(5))
+            canvas.alpha_composite(bsh)
+            bl2 = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            ImageDraw.Draw(bl2).rounded_rectangle(
+                [RX, RY, RX + bw2 + pad * 2, RY + bh2 + 10],
+                radius=22, fill=(199, 107, 58, 235)
+            )
+            canvas.alpha_composite(bl2)
             draw = ImageDraw.Draw(canvas)
-            draw.text((RX + pad3, RY + 5), badge_txt,
+            draw.text((RX + pad, RY + 5), bt,
                       font=self.f_badge, fill=(255, 255, 255, 255))
 
-            # Title
-            ty = RY + bh3 + 28
-            for line in self.wrap(song.title, self.f_title, content_w)[:2]:
-                lw4, lh4 = self.tsize(line, self.f_title)
-                draw.text((RX + 2, ty + 2), line, font=self.f_title, fill=(180, 120, 80, 60))
-                draw.text((RX,     ty),     line, font=self.f_title, fill=(60,  35,  20, 255))
-                ty += lh4 + 6
+            # Title lines
+            ty    = RY + bh2 + 30
+            lines = self.wrap(song.title, self.f_h1, RW)
+            for line in lines[:2]:
+                lw, lh = self.ts(line, self.f_h1)
+                draw.text((RX + 2, ty + 2), line, font=self.f_h1, fill=(200, 158, 105, 42))
+                draw.text((RX,     ty),     line, font=self.f_h1, fill=(58,   44,  35, 255))
+                ty += lh + 5
 
-            # Warm accent underline
-            acc = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-            al  = acc.load()
-            for x in range(RX, RX + 200):
-                t = (x - RX) / 200
-                a = int(240 * (1 - t ** 1.4))
-                for dy in range(3):
-                    if ty + 12 + dy < H:
-                        al[x, ty + 12 + dy] = (210, 100, 50, a)
-            canvas.alpha_composite(acc)
+            # 2px accent divider
+            acc_w   = int(RW * 0.42)
+            acc_y   = ty + 14
+            acc_l   = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            acc_px  = acc_l.load()
+            for x in range(RX, RX + acc_w):
+                t = (x - RX) / acc_w
+                a = int(255 * (1 - t ** 1.6))
+                for dy in range(2):
+                    if acc_y + dy < H:
+                        acc_px[x, acc_y + dy] = (199, 107, 58, a)
+            ImageDraw.Draw(acc_l).ellipse(
+                [RX - 1, acc_y - 1, RX + 3, acc_y + 3], fill=(199, 107, 58, 230)
+            )
+            canvas.alpha_composite(acc_l)
             draw = ImageDraw.Draw(canvas)
 
             # Artist subtitle
-            draw.text((RX, ty + 26), song.channel_name[:30],
-                      font=self.f_sub, fill=(140, 90, 55, 200))
+            draw.text((RX, acc_y + 18), song.channel_name[:34],
+                      font=self.f_sub, fill=(110, 92, 80, 210))
 
-            # Stats row
-            ty += 80
-            stat_data = [
-                (song.duration,              "Duration"),
-                (str(song.view_count),        "Views"),
-                ("HD",                        "Quality"),
+            # Metadata pills
+            meta_y  = acc_y + 74
+            meta_sx = RX
+            meta_items = [
+                (song.duration,        "Duration"),
+                (str(song.view_count), "Views"),
+                ("HD",                 "Quality"),
             ]
-            sx = RX
-            for val, label in stat_data:
-                vw, vh = self.tsize(val,   self.f_stat)
-                lw5, _ = self.tsize(label, self.f_tiny)
-                box_w  = max(vw, lw5) + 28
-                sb     = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-                ImageDraw.Draw(sb).rounded_rectangle(
-                    [sx, ty, sx + box_w, ty + vh + 24],
-                    radius=12, fill=(220, 190, 165, 140)
+            for val, label in meta_items:
+                vw, vh = self.ts(val,   self.f_stat)
+                lw3, _ = self.ts(label, self.f_micro)
+                pw     = max(vw, lw3) + 34
+                ph     = vh + 28
+
+                for blur, sa, se_f in [(8, 14, 6), (4, 22, 3)]:
+                    ps = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+                    se = se_f
+                    ImageDraw.Draw(ps).rounded_rectangle(
+                        [meta_sx - se, meta_y + se, meta_sx + pw + se, meta_y + ph + se],
+                        radius=16 + se, fill=(160, 130, 90, sa)
+                    )
+                    ps = ps.filter(ImageFilter.GaussianBlur(blur))
+                    canvas.alpha_composite(ps)
+
+                pill = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+                ImageDraw.Draw(pill).rounded_rectangle(
+                    [meta_sx, meta_y, meta_sx + pw, meta_y + ph],
+                    radius=16, fill=(250, 244, 235, 192)
                 )
-                canvas.alpha_composite(sb)
+                canvas.alpha_composite(pill)
+                for ii in range(4):
+                    il = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+                    ImageDraw.Draw(il).rounded_rectangle(
+                        [meta_sx + ii, meta_y + ii,
+                         meta_sx + pw - ii, meta_y + 10],
+                        radius=16 - ii, fill=(160, 130, 90, 10 - ii * 2)
+                    )
+                    canvas.alpha_composite(il)
+                pb3 = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+                ImageDraw.Draw(pb3).rounded_rectangle(
+                    [meta_sx, meta_y, meta_sx + pw, meta_y + ph],
+                    radius=16, outline=(210, 178, 135, 95), width=1
+                )
+                canvas.alpha_composite(pb3)
                 draw = ImageDraw.Draw(canvas)
-                draw.text((sx + 14, ty + 6),       val,   font=self.f_stat, fill=(70, 40, 20, 230))
-                draw.text((sx + 14, ty + vh + 10), label, font=self.f_tiny, fill=(130, 90, 60, 180))
-                sx += box_w + 18
+                draw.text((meta_sx + 17, meta_y + 6),      val,   font=self.f_stat,  fill=(68,  44,  22, 240))
+                draw.text((meta_sx + 17, meta_y + vh + 11), label, font=self.f_micro, fill=(140, 108, 72, 180))
+                meta_sx += pw + 14
 
             # ── EQ bars ───────────────────────────────────────────────────
-            eq_cx   = RX + 280
-            eq_base = H - 115
-            self.draw_eq_bars(canvas, eq_cx, eq_base)
+            self.draw_eq_bars(canvas, RX + RW // 2 - 10, H - 102)
 
             # ── Progress bar ──────────────────────────────────────────────
-            self.draw_progress(canvas, 60, H - 62, W - 120, song.duration)
+            self.draw_progress(canvas, 60, H - 55, W - 120, song.duration)
 
             # ── Top sine accent line ──────────────────────────────────────
-            top_acc = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-            ta_d    = ImageDraw.Draw(top_acc)
+            topa = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            tad  = ImageDraw.Draw(topa)
             for x in range(W):
                 t = x / W
-                a = int(200 * math.sin(t * math.pi))
-                ta_d.point((x, 0), fill=(210, 100, 50, a))
-                ta_d.point((x, 1), fill=(210, 100, 50, a // 2))
-            canvas.alpha_composite(top_acc)
+                a = int(170 * math.sin(t * math.pi))
+                tad.point((x, 0), fill=(199, 107, 58, a))
+                tad.point((x, 1), fill=(199, 107, 58, a // 2))
+            canvas.alpha_composite(topa)
+
+            # ── Cinematic DoF edge vignette ───────────────────────────────
+            dof = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            for i in range(70):
+                t = (70 - i) / 70
+                a = int(20 * t ** 3)
+                ImageDraw.Draw(dof).rectangle(
+                    [i, i, W - i, H - i], outline=(185, 148, 100, a), width=1
+                )
+            canvas.alpha_composite(dof)
 
             canvas.save(output, "PNG", optimize=True)
             os.remove(temp)
