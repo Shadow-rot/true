@@ -110,6 +110,9 @@ class MongoDB:
                 {"_id": chat_id}, {"$pull": {"user_ids": user_id}}
             )
 
+    async def get_auths(self, chat_id: int) -> list[int]:
+        return list(await self._get_auth(chat_id))
+
     # ASSISTANT METHODS
     async def set_assistant(self, chat_id: int) -> int:
         num = randint(1, len(userbot.clients))
@@ -293,7 +296,6 @@ class MongoDB:
         if not self.users:
             self.users.extend([user["_id"] async for user in self.usersdb.find()])
         return self.users
-
 
     async def migrate_coll(self) -> None:
         logger.info("Migrating users and chats from old collections...")
