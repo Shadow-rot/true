@@ -138,7 +138,7 @@ class Thumbnail:
             bg = raw.resize(self.size, Image.LANCZOS)
             bg = bg.filter(ImageFilter.GaussianBlur(45))
             bg = ImageEnhance.Brightness(bg).enhance(0.22)
-            bg = ImageEnhance.Saturation(bg).enhance(1.8)
+            bg = ImageEnhance.Color(bg).enhance(1.8)
             canvas = bg.convert("RGBA")
 
             # Cinematic vignette
