@@ -1,87 +1,93 @@
-# Modern Thumbnail Generator - Redesigned 2026
-
 import os
 import aiohttp
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps, ImageEnhance
 from anony import config
 from anony.helpers import Track
 
 
 class Thumbnail:
     def __init__(self):
-        self.card_size = (960, 540)
-        self.font_title = ImageFont.truetype("anony/helpers/Raleway-Bold.ttf", 48)
-        self.font_info = ImageFont.truetype("anony/helpers/Inter-Light.ttf", 32)
-        self.font_small = ImageFont.truetype("anony/helpers/Inter-Light.ttf", 26)
+        self.size = (1280, 720)
+        self.card_size = (820, 460)
 
-    async def save_thumb(self, path: str, url: str):
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as resp:
+        self.font_big = ImageFont.truetype("anony/helpers/Raleway-Bold.ttf", 60)
+        self.font_mid = ImageFont.truetype("anony/helpers/Inter-Light.ttf", 34)
+        self.font_small = ImageFont.truetype("anony/helpers/Inter-Light.ttf", 28)
+
+    async def download(self, path: str, url: str):
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url) as r:
                 with open(path, "wb") as f:
-                    f.write(await resp.read())
+                    f.write(await r.read())
 
-    async def generate(self, song: Track, size=(1280, 720)) -> str:
+    async def generate(self, song: Track) -> str:
         try:
             os.makedirs("cache", exist_ok=True)
+
             temp = f"cache/temp_{song.id}.jpg"
             output = f"cache/{song.id}.png"
 
             if os.path.exists(output):
                 return output
 
-            await self.save_thumb(temp, song.thumbnail)
+            await self.download(temp, song.thumbnail)
 
             # Background
-            bg = Image.open(temp).convert("RGB").resize(size, Image.Resampling.LANCZOS)
-            blur = bg.filter(ImageFilter.GaussianBlur(40))
-            dark = ImageEnhance.Brightness(blur).enhance(0.45)
-            base = dark.convert("RGBA")
+            bg = Image.open(temp).convert("RGB").resize(self.size, Image.Resampling.LANCZOS)
+            blur = bg.filter(ImageFilter.GaussianBlur(35))
+            dark = ImageEnhance.Brightness(blur).enhance(0.35)
+            canvas = dark.convert("RGBA")
 
-            # Glass card effect
-            card = ImageOps.fit(bg, self.card_size, Image.Resampling.LANCZOS)
-            card = card.convert("RGBA")
+            # Center Card
+            thumb = Image.open(temp).convert("RGB")
+            card = ImageOps.fit(thumb, self.card_size, Image.Resampling.LANCZOS)
 
             mask = Image.new("L", self.card_size, 0)
             draw_mask = ImageDraw.Draw(mask)
-            draw_mask.rounded_rectangle((0, 0, *self.card_size), radius=40, fill=255)
+            draw_mask.rounded_rectangle((0, 0, *self.card_size), 45, fill=255)
             card.putalpha(mask)
 
-            base.paste(card, (160, 60), card)
+            pos = ((self.size[0] - self.card_size[0]) // 2, 90)
+            canvas.paste(card, pos, card)
 
-            draw = ImageDraw.Draw(base)
+            draw = ImageDraw.Draw(canvas)
 
-            # Song title
-            title = song.title[:40]
-            draw.text((100, 620), title, font=self.font_title, fill=(255, 255, 255))
+            # Title Centered
+            title = song.title[:35]
+            w, h = draw.textbbox((0, 0), title, font=self.font_big)[2:]
+            draw.text(((1280 - w) // 2, 580), title, font=self.font_big, fill="white")
 
-            # Channel & Views
+            # Channel + Views
             info = f"{song.channel_name[:25]} • {song.view_count}"
-            draw.text((100, 670), info, font=self.font_info, fill=(220, 220, 220))
+            w2, _ = draw.textbbox((0, 0), info, font=self.font_mid)[2:]
+            draw.text(((1280 - w2) // 2, 645), info, font=self.font_mid, fill=(220, 220, 220))
 
-            # Progress bar
-            bar_x1, bar_y = 100, 710
-            bar_x2 = 1180
-
-            draw.rounded_rectangle(
-                (bar_x1, bar_y, bar_x2, bar_y + 12),
-                radius=6,
-                fill=(255, 255, 255, 70),
-            )
-
-            # Fake smooth progress (10%)
-            progress_width = bar_x1 + int((bar_x2 - bar_x1) * 0.15)
+            # Modern Progress Bar
+            bar_width = 900
+            bar_height = 14
+            bar_x = (1280 - bar_width) // 2
+            bar_y = 690
 
             draw.rounded_rectangle(
-                (bar_x1, bar_y, progress_width, bar_y + 12),
-                radius=6,
-                fill=(0, 162, 255),
+                (bar_x, bar_y, bar_x + bar_width, bar_y + bar_height),
+                radius=7,
+                fill=(255, 255, 255, 60)
             )
 
-            # Duration texts
-            draw.text((100, 735), "0:00", font=self.font_small, fill=(255, 255, 255))
-            draw.text((1120, 735), song.duration, font=self.font_small, fill=(255, 255, 255))
+            # Progress (fake 20%)
+            progress = int(bar_width * 0.2)
 
-            base.save(output)
+            draw.rounded_rectangle(
+                (bar_x, bar_y, bar_x + progress, bar_y + bar_height),
+                radius=7,
+                fill=(0, 200, 255)
+            )
+
+            # Duration Text
+            draw.text((bar_x - 70, 685), "0:00", font=self.font_small, fill="white")
+            draw.text((bar_x + bar_width + 15, 685), song.duration, font=self.font_small, fill="white")
+
+            canvas.save(output)
             os.remove(temp)
 
             return output
