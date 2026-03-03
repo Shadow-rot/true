@@ -6,54 +6,60 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from anony import app
 
 
-def upload_to_telegraph(file_path):
-    with open(file_path, "rb") as f:
-        r = requests.post("https://telegra.ph/upload", files={"file": f})
+def upload_to_telegraph(path):
+    with open(path, "rb") as f:
+        r = requests.post(
+            "https://telegra.ph/upload",
+            files={"file": ("image.jpg", f, "image/jpeg")},
+        )
 
     if r.status_code == 200:
         data = r.json()
-        return True, "https://telegra.ph" + data[0]["src"]
+        if isinstance(data, list) and "src" in data[0]:
+            return True, "https://telegra.ph" + data[0]["src"]
 
-    return False, f"Error {r.status_code}"
+    return False, f"Telegraph Error {r.status_code}: {r.text}"
 
 
 @app.on_message(filters.command(["tgm", "telegraph"]))
 async def telegraph_uploader(client, message):
 
     if not message.reply_to_message or not message.reply_to_message.photo:
-        return await message.reply("❍ Reply to a photo under 5MB.")
+        return await message.reply("❍ Reply to a photo (max 5MB).")
 
     msg = await message.reply("❍ Processing...")
 
     try:
-        # Download
-        path = await message.reply_to_message.download()
+        # Download original
+        original = await message.reply_to_message.download()
 
-        # Convert to JPG (fix 400 error)
-        img = Image.open(path).convert("RGB")
-        new_path = path + ".jpg"
-        img.save(new_path, "JPEG", quality=95)
+        # Force clean re-encode
+        img = Image.open(original).convert("RGB")
 
-        os.remove(path)
+        clean_path = "clean_image.jpg"
+        img.save(clean_path, "JPEG", quality=90, optimize=True)
 
-        if os.path.getsize(new_path) > 5 * 1024 * 1024:
-            os.remove(new_path)
-            return await msg.edit("❍ File exceeds 5MB after conversion.")
+        os.remove(original)
 
-        success, result = upload_to_telegraph(new_path)
+        # Check size
+        if os.path.getsize(clean_path) > 5 * 1024 * 1024:
+            os.remove(clean_path)
+            return await msg.edit("❍ Image exceeds 5MB after processing.")
+
+        success, result = upload_to_telegraph(clean_path)
 
         if success:
             await msg.edit_text(
-                f"❍ | [Tap Here]({result})",
+                f"❍ | [Open Link]({result})",
                 disable_web_page_preview=True,
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("❍ Open Link ❍", url=result)]]
+                    [[InlineKeyboardButton("❍ Open Telegraph ❍", url=result)]]
                 ),
             )
         else:
-            await msg.edit_text(f"❍ Upload failed\n\n{result}")
+            await msg.edit(result)
 
-        os.remove(new_path)
+        os.remove(clean_path)
 
     except Exception as e:
-        await msg.edit_text(f"❍ Error:\n{e}")
+        await msg.edit(f"❍ Error:\n{e}")
