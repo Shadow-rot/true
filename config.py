@@ -11,6 +11,11 @@ class Config:
         self.BOT_TOKEN = getenv("BOT_TOKEN")
         self.MONGO_URL = getenv("MONGO_URL")
 
+        self.API_KEY = getenv("API_KEY", "0dcd4a_HpnljtPXEsnDjKUD_xK5VU6f9D_XBdta")
+        # @FallenApiBot send cmd /apikey
+
+        self.API_URL = getenv("API_URL", "https://beta.fallenapi.fun")
+
         self.LOGGER_ID = int(getenv("LOGGER_ID", 0))
         self.OWNER_ID = int(getenv("OWNER_ID", 0))
 
