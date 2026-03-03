@@ -386,7 +386,7 @@ class Thumbnail:
                       art_lbl, font=self.f_micro, fill=(120, 88, 55, 175))
 
             # Verified badge
-            vbt      = "✓  Verified Artist"
+            vbt      = "✓  siyabot"
             vbw, vbh = self.ts(vbt, self.f_micro)
             vby      = ay + ART + 14 + slh + alh + 16
             vbs = Image.new("RGBA", (W, H), (0, 0, 0, 0))
