@@ -124,7 +124,8 @@ class Inline:
                 text=f"+ {lang['add_me']}",
                 url=f"https://t.me/{app.username}?startgroup=true",
  ButtonStyle.SUCCESS,
- )],
+ 
+)],
             [
                 self._btn(lang["help"], "help", ButtonStyle.PRIMARY),
                 self._btn(lang["language"], "language"),
