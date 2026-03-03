@@ -127,16 +127,15 @@ class Inline:
                 style=ButtonStyle.SUCCESS
             )
         ],
+        [
+            self._btn(lang["help"], "help", ButtonStyle.PRIMARY),
+            self._btn(lang["language"], "language"),
+        ],
+        [
+            self.ikb(text=lang["support"], url=config.SUPPORT_CHAT),
+            self.ikb(text=lang["channel"], url=config.SUPPORT_CHANNEL),
+        ],
     ])
-            [
-                self._btn(lang["help"], "help", ButtonStyle.PRIMARY),
-                self._btn(lang["language"], "language"),
-            ],
-            [
-                self.ikb(text=lang["support"], url=config.SUPPORT_CHAT),
-                self.ikb(text=lang["channel"], url=config.SUPPORT_CHANNEL),
-            ],
-        ])
 
     def yt_key(self, link: str) -> types.InlineKeyboardMarkup:
         return self.ikm([[
