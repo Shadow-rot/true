@@ -109,6 +109,11 @@ class YouTube:
         return None
 
     def _build_opts(self, video: bool, cookie: str | None) -> dict:
+        player_clients = (
+            ["tv", "web_creator", "default"]
+            if cookie
+            else ["mweb", "ios", "tv_embedded"]
+        )
         base = {
             "outtmpl": str(self.download_dir / "%(id)s.%(ext)s"),
             "quiet": True,
@@ -121,13 +126,12 @@ class YouTube:
             "fragment_retries": 10,
             "concurrent_fragment_downloads": 4,
             "http_chunk_size": 10 * 1024 * 1024,
-            "cookiefile": cookie,
             "extractor_args": {
-                "youtube": {
-                    "player_client": ["tv", "web_creator", "default"],
-                }
+                "youtube": {"player_client": player_clients}
             },
         }
+        if cookie:
+            base["cookiefile"] = cookie
         if video:
             return {
                 **base,
@@ -144,15 +148,30 @@ class YouTube:
         if cached:
             return cached
 
-        if not video and config.API_KEY and config.API_URL:
-            path = await self.fallen.download_track(self.base + video_id)
-            if path:
-                return path
+        if not video:
+            if not config.API_URL:
+                logger.debug("API_URL not set; skipping FallenApi, falling back to yt-dlp.")
+            elif not config.API_KEY:
+                logger.debug("API_KEY not set; skipping FallenApi, falling back to yt-dlp.")
+            else:
+                logger.info("Trying FallenApi for %s...", video_id)
+                path = await self.fallen.download_track(self.base + video_id)
+                if path:
+                    logger.info("FallenApi download OK: %s", path)
+                    return path
+                logger.warning("FallenApi failed for %s; falling back to yt-dlp.", video_id)
 
         cookie = self.get_cookies()
         opts = self._build_opts(video, cookie)
         ext = "mp4" if video else "webm"
         expected = str(self.download_dir / f"{video_id}.{ext}")
+
+        logger.info(
+            "yt-dlp download: %s | cookie=%s | clients=%s",
+            video_id,
+            bool(cookie),
+            opts["extractor_args"]["youtube"]["player_client"],
+        )
 
         def _run() -> str | None:
             with yt_dlp.YoutubeDL(opts) as ydl:
