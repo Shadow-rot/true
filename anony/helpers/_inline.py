@@ -59,11 +59,21 @@ class Inline:
 
         if not remove:
             keyboard.append([
+<<<<<<< HEAD
                 self._btn("|<<", f"controls replay {chat_id}", ButtonStyle.PRIMARY),  # Blue
                 self._btn("|>", f"controls resume {chat_id}", ButtonStyle.SUCCESS),  # Green
                 self._btn("||", f"controls pause {chat_id}", ButtonStyle.DANGER),    # Red
                 self._btn(">>|", f"controls skip {chat_id}", ButtonStyle.PRIMARY),   # Blue
                 self._btn("[]", f"controls stop {chat_id}", ButtonStyle.DANGER),     # Red
+=======
+                self._btn("|<<", f"controls replay {chat_id}"),
+                self._btn(
+                    "|>", f"controls resume {chat_id}", ButtonStyle.SUCCESS),
+                self._btn("||", f"controls pause {chat_id}"),
+                self._btn(">>|", f"controls skip {chat_id}"),
+                self._btn(
+                    "[]", f"controls stop {chat_id}", ButtonStyle.DANGER),
+>>>>>>> b25cf5d (lol)
             ])
 
         return self.ikm(keyboard)
@@ -77,24 +87,35 @@ class Inline:
 
         if back:
             rows = [[
-                self._btn(f"<< {_lang['back']}", "help back", ButtonStyle.SUCCESS),
-                self._btn(f"x  {_lang['close']}", "help close", ButtonStyle.DANGER),
+                self._btn(f"<< {_lang['back']}",
+                          "help back", ButtonStyle.SUCCESS),
+                self._btn(f"x  {_lang['close']}",
+                          "help close", ButtonStyle.DANGER),
             ]]
         else:
+<<<<<<< HEAD
             cbs = [
                 "admins", "auth", "blist", "lang",
                 "ping", "play", "queue", "stats", "sudo"
             ]
 
+=======
+            cbs = ["admins", "auth", "blist", "lang",
+                   "ping", "play", "queue", "stats", "sudo"]
+>>>>>>> b25cf5d (lol)
             buttons = [
                 self._btn(_lang[f"help_{i}"], f"help {cb}", ButtonStyle.PRIMARY)
                 for i, cb in enumerate(cbs)
             ]
+<<<<<<< HEAD
 
             rows = [
                 buttons[i:i + 3]
                 for i in range(0, len(buttons), 3)
             ]
+=======
+            rows = [buttons[i: i + 3] for i in range(0, len(buttons), 3)]
+>>>>>>> b25cf5d (lol)
 
         return self.ikm(rows)
 
@@ -110,12 +131,16 @@ class Inline:
             )
             for code, name in langs.items()
         ]
+<<<<<<< HEAD
 
         rows = [
             buttons[i:i + 2]
             for i in range(0, len(buttons), 2)
         ]
 
+=======
+        rows = [buttons[i: i + 2] for i in range(0, len(buttons), 2)]
+>>>>>>> b25cf5d (lol)
         return self.ikm(rows)
 
     # 🏓 Ping
@@ -126,6 +151,7 @@ class Inline:
             ]
         ])
 
+<<<<<<< HEAD
     # ▶ Force Play (Blue)
     def play_queued(
         self,
@@ -151,6 +177,13 @@ class Inline:
         _text: str,
         playing: bool
     ) -> types.InlineKeyboardMarkup:
+=======
+    def play_queued(self, chat_id: int, item_id: str, _text: str) -> types.InlineKeyboardMarkup:
+        return self.ikm([[
+            self._btn(
+                _text, f"controls force {chat_id} {item_id}", ButtonStyle.PRIMARY)
+        ]])
+>>>>>>> b25cf5d (lol)
 
         action = "pause" if playing else "resume"
         style = ButtonStyle.DANGER if playing else ButtonStyle.SUCCESS
@@ -177,12 +210,23 @@ class Inline:
 
         return self.ikm([
             [
+<<<<<<< HEAD
                 self._btn(f"{lang['play_mode']} ->", "settings", ButtonStyle.PRIMARY),
                 self._btn(str(admin_only), "settings play", ButtonStyle.SUCCESS),
             ],
             [
                 self._btn(f"{lang['cmd_delete']} ->", "settings", ButtonStyle.PRIMARY),
                 self._btn(str(cmd_delete), "settings delete", ButtonStyle.DANGER),
+=======
+                self._btn(f"{lang['play_mode']} ->", "settings"),
+                self._btn(str(admin_only), "settings play",
+                          ButtonStyle.SUCCESS),
+            ],
+            [
+                self._btn(f"{lang['cmd_delete']} ->", "settings"),
+                self._btn(str(cmd_delete), "settings delete",
+                          ButtonStyle.DANGER),
+>>>>>>> b25cf5d (lol)
             ],
             [
                 self._btn(f"{lang['language']} ->", "settings", ButtonStyle.PRIMARY),
