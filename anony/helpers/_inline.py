@@ -56,7 +56,7 @@ class Inline:
     def help_markup(self, _lang: dict, back: bool = False) -> types.InlineKeyboardMarkup:
         if back:
             rows = [[
-                self._btn(f"<< {_lang['back']}", "help back"),
+                self._btn(f"<< {_lang['back']}", "help back", ButtonStyle.SUCCESS),
                 self._btn(f"x  {_lang['close']}", "help close", ButtonStyle.DANGER),
             ]]
         else:
@@ -125,7 +125,7 @@ class Inline:
                 url=f"https://t.me/{app.username}?startgroup=true",
             )],
             [
-                self._btn(lang["help"], "help"),
+                self._btn(lang["help"], "help", ButtonStyle.PRIMARY),
                 self._btn(lang["language"], "language"),
             ],
             [
