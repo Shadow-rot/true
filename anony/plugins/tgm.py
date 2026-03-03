@@ -32,8 +32,8 @@ async def catbox_upload(_, m):
         if r.status_code == 200:
             link = r.text.strip()
             await msg.edit_text(
-                f"[Open Link]({link})",
-                disable_web_page_preview=True,
+                f"{link}",
+                disable_web_page_preview=False,
                 reply_markup=InlineKeyboardMarkup(
                     [[InlineKeyboardButton("Open Catbox", url=link)]]
                 ),
