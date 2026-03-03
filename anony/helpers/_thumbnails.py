@@ -10,7 +10,6 @@ class Thumbnail:
         self.size = (1280, 720)
         self.card_size = (800, 450)
 
-        # Safe font loading
         try:
             self.font_big = ImageFont.truetype("anony/helpers/Raleway-Bold.ttf", 55)
             self.font_mid = ImageFont.truetype("anony/helpers/Inter-Light.ttf", 30)
@@ -19,6 +18,10 @@ class Thumbnail:
             self.font_big = ImageFont.load_default()
             self.font_mid = ImageFont.load_default()
             self.font_small = ImageFont.load_default()
+
+    def text_size(self, text, font):
+        bbox = font.getbbox(text)
+        return bbox[2] - bbox[0], bbox[3] - bbox[1]
 
     async def download(self, path, url):
         async with aiohttp.ClientSession() as session:
@@ -58,12 +61,12 @@ class Thumbnail:
 
             # Title
             title = song.title[:40]
-            w, h = draw.textsize(title, font=self.font_big)
+            w, h = self.text_size(title, self.font_big)
             draw.text(((1280 - w) // 2, 560), title, font=self.font_big, fill="white")
 
             # Channel + views
             info = f"{song.channel_name[:25]} • {song.view_count}"
-            w2, _ = draw.textsize(info, font=self.font_mid)
+            w2, _ = self.text_size(info, self.font_mid)
             draw.text(((1280 - w2) // 2, 620), info, font=self.font_mid, fill="white")
 
             # Progress bar
