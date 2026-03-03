@@ -1,32 +1,59 @@
 import os
+import requests
 from pyrogram import filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from telegraph import Telegraph
 from anony import app
 
-t = Telegraph()
-t.create_account(short_name="AnonyBot")
 
-@app.on_message(filters.command(["tgm"]))
-async def tg(client, m):
-    if not (m.reply_to_message and m.reply_to_message.photo):
-        return await m.reply("Reply to photo (<5MB).")
+def upload_to_telegraph(file_path):
+    url = "https://telegra.ph/upload"
+    with open(file_path, "rb") as f:
+        r = requests.post(url, files={"file": f})
 
-    if m.reply_to_message.photo.file_size > 5*1024*1024:
-        return await m.reply("Max 5MB only.")
+    if r.status_code == 200:
+        try:
+            data = r.json()
+            if isinstance(data, list):
+                return True, "https://telegra.ph" + data[0]["src"]
+        except:
+            return False, "Invalid Telegraph response"
+    return False, f"Error {r.status_code}"
 
-    x = await m.reply("Uploading...")
+
+@app.on_message(filters.command(["tgm", "telegraph"]))
+async def telegraph_uploader(client, message):
+
+    if not message.reply_to_message or not message.reply_to_message.photo:
+        return await message.reply("❍ Reply to a photo under 5MB.")
+
+    photo = message.reply_to_message.photo
+
+    if photo.file_size > 5 * 1024 * 1024:
+        return await message.reply("❍ File must be under 5MB.")
+
+    msg = await message.reply("❍ Processing...")
+
     try:
-        p = await m.reply_to_message.download()
-        r = t.upload_file(p)
-        link = "https://telegra.ph" + r[0]
-        await x.edit(
-            f"[Open Link]({link})",
-            disable_web_page_preview=True,
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("Open", url=link)]]
-            ),
-        )
-        os.remove(p)
+        path = await message.reply_to_message.download()
+
+        success, result = upload_to_telegraph(path)
+
+        if success:
+            await msg.edit_text(
+                f"❍ | [Tap Here]({result})",
+                disable_web_page_preview=True,
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("❍ Open Link ❍", url=result)]]
+                ),
+            )
+        else:
+            await msg.edit_text(f"❍ Upload failed\n\n{result}")
+
+        os.remove(path)
+
     except Exception as e:
-        await x.edit(str(e))
+        await msg.edit_text(f"❍ Error:\n{e}")
+        try:
+            os.remove(path)
+        except:
+            pass
