@@ -1,22 +1,19 @@
 import os
 import requests
+from PIL import Image
 from pyrogram import filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from anony import app
 
 
 def upload_to_telegraph(file_path):
-    url = "https://telegra.ph/upload"
     with open(file_path, "rb") as f:
-        r = requests.post(url, files={"file": f})
+        r = requests.post("https://telegra.ph/upload", files={"file": f})
 
     if r.status_code == 200:
-        try:
-            data = r.json()
-            if isinstance(data, list):
-                return True, "https://telegra.ph" + data[0]["src"]
-        except:
-            return False, "Invalid Telegraph response"
+        data = r.json()
+        return True, "https://telegra.ph" + data[0]["src"]
+
     return False, f"Error {r.status_code}"
 
 
@@ -26,17 +23,24 @@ async def telegraph_uploader(client, message):
     if not message.reply_to_message or not message.reply_to_message.photo:
         return await message.reply("❍ Reply to a photo under 5MB.")
 
-    photo = message.reply_to_message.photo
-
-    if photo.file_size > 5 * 1024 * 1024:
-        return await message.reply("❍ File must be under 5MB.")
-
     msg = await message.reply("❍ Processing...")
 
     try:
+        # Download
         path = await message.reply_to_message.download()
 
-        success, result = upload_to_telegraph(path)
+        # Convert to JPG (fix 400 error)
+        img = Image.open(path).convert("RGB")
+        new_path = path + ".jpg"
+        img.save(new_path, "JPEG", quality=95)
+
+        os.remove(path)
+
+        if os.path.getsize(new_path) > 5 * 1024 * 1024:
+            os.remove(new_path)
+            return await msg.edit("❍ File exceeds 5MB after conversion.")
+
+        success, result = upload_to_telegraph(new_path)
 
         if success:
             await msg.edit_text(
@@ -49,11 +53,7 @@ async def telegraph_uploader(client, message):
         else:
             await msg.edit_text(f"❍ Upload failed\n\n{result}")
 
-        os.remove(path)
+        os.remove(new_path)
 
     except Exception as e:
         await msg.edit_text(f"❍ Error:\n{e}")
-        try:
-            os.remove(path)
-        except:
-            pass
