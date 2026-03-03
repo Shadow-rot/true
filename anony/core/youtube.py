@@ -108,12 +108,19 @@ class YouTube:
                 return str(path)
         return None
 
-    def _build_opts(self, video: bool, cookie: str | None) -> dict:
+    def _build_extractor_args(self, cookie: str | None) -> dict:
         player_clients = (
-            ["tv", "web_creator", "default"]
+            ["tv", "web_creator", "mweb", "default"]
             if cookie
-            else ["mweb", "ios", "tv_embedded"]
+            else ["web_safari", "web_embedded", "mweb"]
         )
+        args: dict = {"player_client": player_clients}
+        po_token = getattr(config, "PO_TOKEN", None)
+        if po_token:
+            args["po_token"] = [f"mweb.gvs+{po_token}", f"mweb.player+{po_token}"]
+        return {"youtube": args}
+
+    def _build_opts(self, video: bool, cookie: str | None) -> dict:
         base = {
             "outtmpl": str(self.download_dir / "%(id)s.%(ext)s"),
             "quiet": True,
@@ -126,9 +133,7 @@ class YouTube:
             "fragment_retries": 10,
             "concurrent_fragment_downloads": 4,
             "http_chunk_size": 10 * 1024 * 1024,
-            "extractor_args": {
-                "youtube": {"player_client": player_clients}
-            },
+            "extractor_args": self._build_extractor_args(cookie),
         }
         if cookie:
             base["cookiefile"] = cookie
@@ -149,29 +154,36 @@ class YouTube:
             return cached
 
         if not video:
-            if not config.API_URL:
-                logger.debug("API_URL not set; skipping FallenApi, falling back to yt-dlp.")
-            elif not config.API_KEY:
-                logger.debug("API_KEY not set; skipping FallenApi, falling back to yt-dlp.")
+            if not config.API_URL or not config.API_KEY:
+                logger.warning(
+                    "FallenApi skipped for %s: %s is not set in config.",
+                    video_id,
+                    "API_URL" if not config.API_URL else "API_KEY",
+                )
             else:
                 logger.info("Trying FallenApi for %s...", video_id)
                 path = await self.fallen.download_track(self.base + video_id)
                 if path:
-                    logger.info("FallenApi download OK: %s", path)
+                    logger.info("FallenApi OK: %s", path)
                     return path
                 logger.warning("FallenApi failed for %s; falling back to yt-dlp.", video_id)
 
         cookie = self.get_cookies()
         opts = self._build_opts(video, cookie)
-        ext = "mp4" if video else "webm"
-        expected = str(self.download_dir / f"{video_id}.{ext}")
+        clients = opts["extractor_args"]["youtube"]["player_client"]
+        has_po = bool(opts["extractor_args"]["youtube"].get("po_token"))
 
         logger.info(
-            "yt-dlp download: %s | cookie=%s | clients=%s",
-            video_id,
-            bool(cookie),
-            opts["extractor_args"]["youtube"]["player_client"],
+            "yt-dlp: %s | cookie=%s | po_token=%s | clients=%s",
+            video_id, bool(cookie), has_po, clients,
         )
+        if not cookie and not has_po:
+            logger.warning(
+                "No cookies and no PO_TOKEN set. YouTube will likely reject this request. "
+                "Add cookies to %s or set PO_TOKEN in config. "
+                "See: https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide",
+                self.cookie_dir,
+            )
 
         def _run() -> str | None:
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -186,7 +198,7 @@ class YouTube:
                     logger.warning("yt-dlp extractor error: %s", e)
                     return None
             result = self._cached(video_id, video)
-            return result or (expected if Path(expected).is_file() else None)
+            return result or (str(self.download_dir / f"{video_id}.{'mp4' if video else 'webm'}") if Path(self.download_dir / f"{video_id}.{'mp4' if video else 'webm'}").is_file() else None)
 
         return await asyncio.to_thread(_run)
 
