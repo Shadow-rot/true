@@ -1,281 +1,267 @@
 from io import BytesIO
+import base64
 from pyrogram import Client, filters, enums
 from pyrogram.types import Message
 from anony import app
 from httpx import AsyncClient, Timeout
-import json
 
 fetch = AsyncClient(
     http2=True,
     verify=False,
     headers={
         "Accept-Language": "en-US,en;q=0.9",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     },
     timeout=Timeout(30),
 )
 
-class QuotlyException(Exception):
-    pass
+# ── Color Themes ──────────────────────────────────────────────────────────────
+THEMES = {
+    "default":  "#1b1429",  # Dark Purple
+    "black":    "#000000",
+    "white":    "#ffffff",
+    "red":      "#1a0000",
+    "blue":     "#00001a",
+    "green":    "#001a00",
+    "cyan":     "#001a1a",
+    "magenta":  "#1a001a",
+    "yellow":   "#1a1a00",
+    "orange":   "#1a0d00",
+    "pink":     "#1a0010",
+    "teal":     "#00141a",
+    "indigo":   "#0d0021",
+    "violet":   "#150021",
+    "brown":    "#120800",
+    "gray":     "#111111",
+    # RGB vivid
+    "rgb_red":     "#FF0000",
+    "rgb_green":   "#00FF00",
+    "rgb_blue":    "#0000FF",
+    "rgb_cyan":    "#00FFFF",
+    "rgb_magenta": "#FF00FF",
+    "rgb_yellow":  "#FFFF00",
+    "rgb_white":   "#FFFFFF",
+    "rgb_orange":  "#FF8000",
+    "rgb_pink":    "#FF69B4",
+    "rgb_lime":    "#7FFF00",
+    "rgb_sky":     "#87CEEB",
+    "rgb_gold":    "#FFD700",
+    "rgb_purple":  "#800080",
+    "rgb_maroon":  "#800000",
+    "rgb_navy":    "#000080",
+}
 
-QUOTE_APIS = [
+APIS = [
     "https://bot.lyo.su/quote/generate",
     "https://qoute-api-bice.vercel.app/generate",
 ]
 
-async def get_message_sender_id(ctx: Message):
-    if ctx.forward_date:
-        return (
-            1 if ctx.forward_sender_name
-            else ctx.forward_from.id if ctx.forward_from
-            else ctx.forward_from_chat.id if ctx.forward_from_chat
-            else 1
-        )
-    return ctx.from_user.id if ctx.from_user else ctx.sender_chat.id if ctx.sender_chat else 1
+HELP_TEXT = """<b>🎨 Quote Command — /q</b>
 
-async def get_message_sender_name(ctx: Message):
-    if ctx.forward_date:
-        if ctx.forward_sender_name:
-            return ctx.forward_sender_name
-        elif ctx.forward_from:
-            return f"{ctx.forward_from.first_name} {ctx.forward_from.last_name}".strip() if ctx.forward_from.last_name else ctx.forward_from.first_name
-        elif ctx.forward_from_chat:
-            return ctx.forward_from_chat.title
+<b>Usage:</b>
+• <code>/q</code> — Quote replied message
+• <code>/q r</code> — Include reply context
+• <code>/q 2</code> — Quote next 2 messages (max 4)
+• <code>/q r 3</code> — 3 messages with reply context
+• <code>/q [color]</code> — Use a color theme
+
+<b>🎨 Available Colors:</b>
+<code>black, white, red, blue, green, cyan, magenta,
+yellow, orange, pink, teal, indigo, violet, brown,
+gray, rgb_red, rgb_green, rgb_blue, rgb_cyan,
+rgb_magenta, rgb_yellow, rgb_white, rgb_orange,
+rgb_pink, rgb_lime, rgb_sky, rgb_gold, rgb_purple,
+rgb_maroon, rgb_navy</code>
+
+<b>Example:</b> <code>/q r 3 blue</code>"""
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def _photo_dict(photo):
+    if not photo:
         return ""
-    
-    if ctx.from_user:
-        return f"{ctx.from_user.first_name} {ctx.from_user.last_name}".strip() if ctx.from_user.last_name else ctx.from_user.first_name
-    return ctx.sender_chat.title if ctx.sender_chat else ""
+    return {
+        "small_file_id":        photo.small_file_id,
+        "small_photo_unique_id": photo.small_photo_unique_id,
+        "big_file_id":          photo.big_file_id,
+        "big_photo_unique_id":   photo.big_photo_unique_id,
+    }
 
-async def get_message_sender_username(ctx: Message):
-    if ctx.forward_date:
-        if ctx.forward_from and ctx.forward_from.username:
-            return ctx.forward_from.username
-        elif ctx.forward_from_chat and ctx.forward_from_chat.username:
-            return ctx.forward_from_chat.username
+async def _sender_id(msg: Message) -> int:
+    if msg.forward_date:
+        if msg.forward_sender_name: return 1
+        if msg.forward_from:        return msg.forward_from.id
+        if msg.forward_from_chat:   return msg.forward_from_chat.id
+        return 1
+    if msg.from_user:   return msg.from_user.id
+    if msg.sender_chat: return msg.sender_chat.id
+    return 1
+
+async def _sender_name(msg: Message) -> str:
+    if msg.forward_date:
+        if msg.forward_sender_name: return msg.forward_sender_name
+        if msg.forward_from:
+            u = msg.forward_from
+            return f"{u.first_name} {u.last_name}".strip() if u.last_name else u.first_name
+        if msg.forward_from_chat:   return msg.forward_from_chat.title
         return ""
-    
-    if ctx.from_user and ctx.from_user.username:
-        return ctx.from_user.username
-    return ctx.sender_chat.username if ctx.sender_chat and ctx.sender_chat.username else ""
+    if msg.from_user:
+        u = msg.from_user
+        return f"{u.first_name} {u.last_name}".strip() if u.last_name else u.first_name
+    return msg.sender_chat.title if msg.sender_chat else ""
 
-async def get_message_sender_photo(ctx: Message):
-    photo_data = None
-    
-    if ctx.forward_date:
-        if ctx.forward_from and ctx.forward_from.photo:
-            photo_data = ctx.forward_from.photo
-        elif ctx.forward_from_chat and ctx.forward_from_chat.photo:
-            photo_data = ctx.forward_from_chat.photo
-    else:
-        if ctx.from_user and ctx.from_user.photo:
-            photo_data = ctx.from_user.photo
-        elif ctx.sender_chat and ctx.sender_chat.photo:
-            photo_data = ctx.sender_chat.photo
-    
-    if photo_data:
-        return {
-            "small_file_id": photo_data.small_file_id,
-            "small_photo_unique_id": photo_data.small_photo_unique_id,
-            "big_file_id": photo_data.big_file_id,
-            "big_photo_unique_id": photo_data.big_photo_unique_id,
-        }
+async def _sender_username(msg: Message) -> str:
+    if msg.forward_date:
+        if msg.forward_from and msg.forward_from.username:         return msg.forward_from.username
+        if msg.forward_from_chat and msg.forward_from_chat.username: return msg.forward_from_chat.username
+        return ""
+    if msg.from_user and msg.from_user.username:   return msg.from_user.username
+    if msg.sender_chat and msg.sender_chat.username: return msg.sender_chat.username
     return ""
 
-async def get_text_or_caption(ctx: Message):
-    if ctx.text:
-        return ctx.text
-    elif ctx.caption:
-        return ctx.caption
-    elif ctx.sticker:
-        return ctx.sticker.emoji or "[Sticker]"
-    elif ctx.photo:
-        return "[Photo]"
-    elif ctx.video:
-        return "[Video]"
-    elif ctx.audio:
-        return "[Audio]"
-    elif ctx.voice:
-        return "[Voice Message]"
-    elif ctx.document:
-        return "[Document]"
-    elif ctx.animation:
-        return "[GIF]"
-    return "[Message]"
+async def _sender_photo(msg: Message):
+    if msg.forward_date:
+        if msg.forward_from and msg.forward_from.photo:         return _photo_dict(msg.forward_from.photo)
+        if msg.forward_from_chat and msg.forward_from_chat.photo: return _photo_dict(msg.forward_from_chat.photo)
+    else:
+        if msg.from_user and msg.from_user.photo:   return _photo_dict(msg.from_user.photo)
+        if msg.sender_chat and msg.sender_chat.photo: return _photo_dict(msg.sender_chat.photo)
+    return ""
 
-async def generate_quote_with_api(api_url: str, payload: dict) -> bytes:
-    try:
-        response = await fetch.post(api_url, json=payload)
-        
-        if response.status_code == 200:
-            content_type = response.headers.get('content-type', '')
-            
-            if 'image' in content_type or api_url.endswith('.png'):
-                return response.content
-            else:
-                data = response.json()
-                if 'result' in data and 'image' in data['result']:
-                    import base64
-                    return base64.b64decode(data['result']['image'])
-                elif 'image' in data:
-                    import base64
-                    return base64.b64decode(data['image'])
-                elif 'ok' in data and not data['ok']:
-                    raise QuotlyException(f"API Error: {data.get('error', 'Unknown error')}")
-                else:
-                    return response.content
+def _text(msg: Message) -> str:
+    if msg.text:      return msg.text
+    if msg.caption:   return msg.caption
+    if msg.sticker:   return msg.sticker.emoji or "🎭"
+    if msg.photo:     return "🖼 Photo"
+    if msg.video:     return "🎬 Video"
+    if msg.audio:     return "🎵 Audio"
+    if msg.voice:     return "🎤 Voice"
+    if msg.document:  return "📄 Document"
+    if msg.animation: return "🎞 GIF"
+    return "💬 Message"
+
+def _entities(msg: Message) -> list:
+    src = msg.entities or msg.caption_entities or []
+    return [{"type": e.type.name.lower(), "offset": e.offset, "length": e.length} for e in src]
+
+def _parse_args(text: str):
+    """Returns (is_reply, count, color_hex)."""
+    parts  = text.split()[1:]
+    is_reply = False
+    count    = 1
+    color    = THEMES["default"]
+
+    for p in parts:
+        low = p.lower()
+        if low == "r":
+            is_reply = True
+        elif low in THEMES:
+            color = THEMES[low]
+        elif low.startswith("#") and len(low) in (4, 7):
+            color = low
         else:
-            raise QuotlyException(f"HTTP {response.status_code}")
-    except Exception as e:
-        raise QuotlyException(f"{api_url}: {str(e)}")
+            try:
+                n = int(p)
+                if 1 <= n <= 4:
+                    count = n
+            except ValueError:
+                pass
 
-async def pyrogram_to_quotly(messages, is_reply):
-    if not isinstance(messages, list):
-        messages = [messages]
-    
+    return is_reply, count, color
+
+
+# ── Core Builder ──────────────────────────────────────────────────────────────
+async def build_quote(messages: list, is_reply: bool, bg: str) -> bytes:
     payload = {
         "type": "quote",
         "format": "webp",
-        "backgroundColor": "#1b1429",
+        "backgroundColor": bg,
         "messages": [],
     }
-    
-    for message in messages:
-        entities_list = []
-        
-        if message.entities:
-            entities_list = [
-                {
-                    "type": entity.type.name.lower(),
-                    "offset": entity.offset,
-                    "length": entity.length,
-                }
-                for entity in message.entities
-            ]
-        elif message.caption_entities:
-            entities_list = [
-                {
-                    "type": entity.type.name.lower(),
-                    "offset": entity.offset,
-                    "length": entity.length,
-                }
-                for entity in message.caption_entities
-            ]
-        
-        message_dict = {
-            "chatId": await get_message_sender_id(message),
-            "text": await get_text_or_caption(message),
+
+    for msg in messages:
+        entry = {
+            "chatId": await _sender_id(msg),
+            "text":   _text(msg),
             "avatar": True,
             "from": {
-                "id": await get_message_sender_id(message),
-                "name": await get_message_sender_name(message),
-                "username": await get_message_sender_username(message),
-                "type": message.chat.type.name.lower(),
-                "photo": await get_message_sender_photo(message),
+                "id":       await _sender_id(msg),
+                "name":     await _sender_name(msg),
+                "username": await _sender_username(msg),
+                "type":     msg.chat.type.name.lower(),
+                "photo":    await _sender_photo(msg),
             },
-            "entities": entities_list,
-            "replyMessage": {}
+            "entities":    _entities(msg),
+            "replyMessage": {},
         }
-        
-        if message.reply_to_message and is_reply:
-            message_dict["replyMessage"] = {
-                "name": await get_message_sender_name(message.reply_to_message),
-                "text": await get_text_or_caption(message.reply_to_message),
-                "chatId": await get_message_sender_id(message.reply_to_message),
+
+        if is_reply and msg.reply_to_message:
+            r = msg.reply_to_message
+            entry["replyMessage"] = {
+                "name":   await _sender_name(r),
+                "text":   _text(r),
+                "chatId": await _sender_id(r),
             }
-        
-        payload["messages"].append(message_dict)
-    
-    last_error = None
-    for api_url in QUOTE_APIS:
+
+        payload["messages"].append(entry)
+
+    last_err = "No APIs tried"
+    for url in APIS:
         try:
-            result = await generate_quote_with_api(api_url, payload)
-            return result
-        except QuotlyException as e:
-            last_error = str(e)
-            continue
-    
-    raise QuotlyException(f"All APIs failed. Last error: {last_error}")
-
-def parse_arguments(text):
-    args = text.split()[1:]
-    is_reply = False
-    count = 1
-    
-    for arg in args:
-        if arg.lower() == 'r':
-            is_reply = True
-        else:
-            try:
-                num = int(arg)
-                if 1 <= num <= 10:
-                    count = num
-            except ValueError:
+            resp = await fetch.post(url, json=payload)
+            if resp.status_code != 200:
+                last_err = f"HTTP {resp.status_code} from {url}"
                 continue
-    
-    return is_reply, count
 
+            ct = resp.headers.get("content-type", "")
+            if "image" in ct:
+                return resp.content
+
+            data = resp.json()
+            img  = (data.get("result") or {}).get("image") or data.get("image")
+            if img:
+                return base64.b64decode(img)
+            last_err = data.get("error", "Unexpected response")
+        except Exception as e:
+            last_err = str(e)
+
+    raise RuntimeError(f"All APIs failed — {last_err}")
+
+
+# ── Handler ───────────────────────────────────────────────────────────────────
 @app.on_message(filters.command("q") & filters.reply)
-async def quotly_handler(client: Client, ctx: Message):
-    is_reply, count = parse_arguments(ctx.text)
-    
-    if count < 1 or count > 10:
-        return await ctx.reply_text(
-            "<b>⚠️ Invalid Range</b>\n<i>Please use 1-10 messages</i>",
-            parse_mode=enums.ParseMode.HTML
-        )
-    
-    processing_msg = await ctx.reply_text(
-        "<b>⏳ Generating Quote...</b>",
-        parse_mode=enums.ParseMode.HTML
-    )
-    
+async def quote_cmd(client: Client, ctx: Message):
+    is_reply, count, color = _parse_args(ctx.text)
+
+    # Show help when /q help or /q colors
+    if any(w in ctx.text.lower() for w in ("help", "colors", "colour")):
+        return await ctx.reply_text(HELP_TEXT, parse_mode=enums.ParseMode.HTML)
+
+    status = await ctx.reply_text("⏳ <b>Generating quote…</b>", parse_mode=enums.ParseMode.HTML)
+
     try:
         if count == 1:
-            messages = [ctx.reply_to_message]
+            msgs = [ctx.reply_to_message]
         else:
-            message_ids = list(range(
-                ctx.reply_to_message.id,
-                ctx.reply_to_message.id + count
-            ))
-            
-            fetched_messages = await client.get_messages(
-                chat_id=ctx.chat.id,
-                message_ids=message_ids,
-                replies=-1,
-            )
-            
-            messages = [msg for msg in fetched_messages if not msg.empty]
-        
-        if not messages:
-            await processing_msg.delete()
-            return await ctx.reply_text(
-                "<b>❌ No Valid Messages</b>\n<i>Could not fetch messages</i>",
-                parse_mode=enums.ParseMode.HTML
-            )
-        
-        quote_image = await pyrogram_to_quotly(messages, is_reply=is_reply)
-        
-        bio_sticker = BytesIO(quote_image)
-        bio_sticker.name = "quote.webp"
-        
-        await ctx.reply_sticker(
-            sticker=bio_sticker,
-            reply_to_message_id=ctx.reply_to_message.id
-        )
-        
-    except QuotlyException as e:
-        await ctx.reply_text(
-            f"<b>⚠️ Quote Generation Failed</b>\n<code>{str(e)}</code>",
-            parse_mode=enums.ParseMode.HTML
-        )
+            ids = list(range(ctx.reply_to_message.id, ctx.reply_to_message.id + count))
+            fetched = await client.get_messages(ctx.chat.id, ids, replies=-1)
+            msgs = [m for m in fetched if not m.empty]
+
+        if not msgs:
+            await status.delete()
+            return await ctx.reply_text("❌ <b>No valid messages found.</b>", parse_mode=enums.ParseMode.HTML)
+
+        image = await build_quote(msgs, is_reply, color)
+
+        buf = BytesIO(image)
+        buf.name = "quote.webp"
+        await ctx.reply_sticker(sticker=buf, reply_to_message_id=ctx.reply_to_message.id)
+
     except Exception as e:
         await ctx.reply_text(
-            f"<b>❌ Error Occurred</b>\n<code>{str(e)}</code>",
+            f"⚠️ <b>Failed:</b> <code>{e}</code>",
             parse_mode=enums.ParseMode.HTML
         )
     finally:
-        try:
-            await processing_msg.delete()
-        except:
-            pass
+        try: await status.delete()
+        except: pass
