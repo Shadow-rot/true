@@ -9,7 +9,7 @@ from anony import app
 async def catbox_upload(_, m):
 
     if not m.reply_to_message:
-        return await m.reply("Reply to any file (Max 200MB).")
+        return await m.reply("Reply to a file (Max 200MB).")
 
     msg = await m.reply("Uploading...")
 
@@ -31,11 +31,16 @@ async def catbox_upload(_, m):
 
         if r.status_code == 200:
             link = r.text.strip()
+
             await msg.edit_text(
-                f"{link}",
-                disable_web_page_preview=False,
+                link,
+                disable_web_page_preview=True,
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("Open Catbox", url=link)]]
+                    [
+                        [
+                            InlineKeyboardButton("Copy", copy_text=link)
+                        ]
+                    ]
                 ),
             )
         else:
