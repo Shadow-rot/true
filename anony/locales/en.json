@@ -8,6 +8,8 @@
     "auth_removed": "Removed {0} from the authorized users list.",
     "auth_is_admin": "The user is already an <b>admin</b> and can't be added to authorized users.",
     "auto_left": "I waited, I watched, I yawned... and then I left the video chat.",
+"auth_list_empty": "No authorized users in this group.",
+"auth_list_header": "Authorized Users:",
     "bl_usage": "<b>Usage:</b>\n\n/{0} [chat_id|user_id]",
     "bl_invalid": "Only chat IDs and user IDs are supported.",
     "bl_already": "This chat is already blacklisted.",
