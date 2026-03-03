@@ -43,3 +43,23 @@ async def _admincache(_, m: types.Message):
     sent = await m.reply_text(m.lang["admin_cache_reloading"])
     await db.get_admins(m.chat.id, reload=True)
     await sent.edit_text(m.lang["admin_cache_reloaded"])
+
+
+@app.on_message(filters.command("authlist") & filters.group & ~app.bl_users)
+@lang.language()
+async def _authlist(_, m: types.Message):
+    auth_ids = await db.get_auths(m.chat.id)
+
+    if not auth_ids:
+        return await m.reply_text(m.lang["auth_list_empty"])
+
+    mentions = []
+    for uid in auth_ids:
+        try:
+            user = await app.get_users(uid)
+            mentions.append(f"• {user.mention}")
+        except Exception:
+            mentions.append(f"• `{uid}`")
+
+    text = m.lang["auth_list_header"] + "\n" + "\n".join(mentions)
+    await m.reply_text(text)
