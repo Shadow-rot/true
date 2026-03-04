@@ -2,7 +2,6 @@
 # Licensed under the MIT License.
 # This file is part of AnonXMusic
 
-
 import asyncio
 
 from pyrogram import enums, errors, types
@@ -42,29 +41,28 @@ def checkUB(play):
             if (
                 m.from_user.id not in adminlist
                 and not await db.is_auth(chat_id, m.from_user.id)
-                and not m.from_user.id in app.sudoers
+                and m.from_user.id not in app.sudoers
             ):
                 return await m.reply_text(m.lang["play_admin"])
 
         if chat_id not in db.active_calls:
             client = await db.get_client(chat_id)
+            ub_id = client.me.id
             try:
-                member = await app.get_chat_member(chat_id, client.me.id)
+                member = await app.get_chat_member(chat_id, ub_id)
                 if member.status in [
                     enums.ChatMemberStatus.BANNED,
                     enums.ChatMemberStatus.RESTRICTED,
                 ]:
                     try:
-                        await app.unban_chat_member(
-                            chat_id=chat_id, user_id=client.id
-                        )
+                        await app.unban_chat_member(chat_id=chat_id, user_id=ub_id)
                     except Exception:
                         return await m.reply_text(
                             m.lang["play_banned"].format(
                                 app.name,
-                                client.id,
-                                client.mention,
-                                f"@{client.username}" if client.username else None,
+                                ub_id,
+                                client.me.mention,
+                                f"@{client.me.username}" if client.me.username else None,
                             )
                         )
             except errors.ChatAdminRequired:
@@ -97,7 +95,7 @@ def checkUB(play):
                 except errors.InviteRequestSent:
                     await asyncio.sleep(2)
                     try:
-                        await app.approve_chat_join_request(chat_id, client.id)
+                        await app.approve_chat_join_request(chat_id, ub_id)
                     except errors.HideRequesterMissing:
                         pass
                     except Exception as ex:
