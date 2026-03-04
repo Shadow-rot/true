@@ -56,17 +56,17 @@ def _confirm_buttons(pid: str) -> InlineKeyboardMarkup:
 
 
 async def _ensure_ub(chat_id: int, reply) -> bool:
-    """
-    Ensures the userbot client is present in the chat.
-    Mirrors checkUB join/unban logic but works for any context.
-    Returns True if ready, False if a blocking error occurred (reply already sent).
-    """
     if chat_id in db.active_calls:
         return True
 
     client = await db.get_client(chat_id)
-    if not client:
-        await reply("No assistant configured for this chat.")
+
+    if client is None:
+        await reply("No userbot configured for this chat.")
+        return False
+
+    if client.me is None:
+        await reply("Userbot is not started yet. Try again in a moment.")
         return False
 
     ub_id = client.me.id
@@ -77,55 +77,59 @@ async def _ensure_ub(chat_id: int, reply) -> bool:
             try:
                 await app.unban_chat_member(chat_id=chat_id, user_id=ub_id)
             except Exception:
-                await reply(f"Assistant is banned in this chat. Unban user ID: <code>{ub_id}</code>")
+                await reply(f"Userbot is banned in this chat. Unban user ID: <code>{ub_id}</code>")
                 return False
 
     except errors.ChatAdminRequired:
-        await reply("Bot needs admin rights to manage the assistant.")
+        await reply("Bot needs admin rights to manage the userbot.")
         return False
 
     except (errors.UserNotParticipant, errors.exceptions.bad_request_400.UserNotParticipant):
-        if hasattr(client, "resolve_peer"):
-            try:
-                chat = await app.get_chat(chat_id)
-                invite_link = chat.username or chat.invite_link
-                if not invite_link:
-                    invite_link = await app.export_chat_invite_link(chat_id)
-            except errors.ChatAdminRequired:
-                await reply("Bot needs admin rights to invite the assistant.")
-                return False
-            except Exception as ex:
-                await reply(f"Could not get invite link: {type(ex).__name__}")
-                return False
+        try:
+            chat = await app.get_chat(chat_id)
+            invite_link = chat.username or chat.invite_link
+            if not invite_link:
+                invite_link = await app.export_chat_invite_link(chat_id)
+        except errors.ChatAdminRequired:
+            await reply("Bot needs admin rights to invite the userbot.")
+            return False
+        except Exception as ex:
+            await reply(f"Could not get invite link: {type(ex).__name__}")
+            return False
 
-            msg = await reply("Inviting assistant to chat...")
+        msg = await reply("Inviting userbot to chat...")
+        await asyncio.sleep(2)
+
+        try:
+            await client.join_chat(invite_link)
+        except errors.UserAlreadyParticipant:
+            pass
+        except errors.InviteRequestSent:
             await asyncio.sleep(2)
             try:
-                await client.join_chat(invite_link)
-            except errors.UserAlreadyParticipant:
+                await app.approve_chat_join_request(chat_id, ub_id)
+            except errors.HideRequesterMissing:
                 pass
-            except errors.InviteRequestSent:
-                await asyncio.sleep(2)
-                try:
-                    await app.approve_chat_join_request(chat_id, ub_id)
-                except errors.HideRequesterMissing:
-                    pass
-                except Exception as ex:
-                    await msg.edit_text(f"Invite error: {type(ex).__name__}")
-                    return False
             except Exception as ex:
                 await msg.edit_text(f"Invite error: {type(ex).__name__}")
                 return False
+        except Exception as ex:
+            await msg.edit_text(f"Invite error: {type(ex).__name__}")
+            return False
 
-            try:
-                await msg.delete()
-            except Exception:
-                pass
+        try:
+            await msg.delete()
+        except Exception:
+            pass
 
-            try:
-                await client.resolve_peer(chat_id)
-            except Exception:
-                pass
+        try:
+            await client.resolve_peer(chat_id)
+        except Exception:
+            pass
+
+    except Exception as ex:
+        await reply(f"Userbot check failed: {type(ex).__name__}: {ex}")
+        return False
 
     return True
 
@@ -137,16 +141,19 @@ async def _play_by_id(pid: str, chat_id: int, mention: str, reply, shuffle: bool
     pl = await db.pl_get_by_id(pid)
     if not pl:
         return await reply("Playlist not found.")
+
     tracks = await db.pl_get_tracks(pid)
     if not tracks:
         return await reply("Playlist is empty.")
+
     if shuffle:
         random.shuffle(tracks)
 
     sent = await reply("Loading playlist...")
+
     first_track = await yt.search(tracks[0]["url"], sent.id, video=False)
     if not first_track:
-        return await sent.edit_text(f"Could not fetch track. Support: {config.SUPPORT_CHAT}")
+        return await sent.edit_text(f"Could not fetch first track. Support: {config.SUPPORT_CHAT}")
 
     first_track.user = mention
     position = queue.add(chat_id, first_track)
@@ -158,7 +165,10 @@ async def _play_by_id(pid: str, chat_id: int, mention: str, reply, shuffle: bool
             queue.add(chat_id, tr)
 
     label = "Playlist shuffled and queued" if shuffle else "Playlist queued"
-    summary = f"{label}\n\n<b>{pl['name'].title()}</b>\nSongs: {len(tracks)}\nBy: {mention}\n\n{_blockquote(tracks)}"
+    summary = (
+        f"{label}\n\n<b>{pl['name'].title()}</b>\n"
+        f"Songs: {len(tracks)}\nBy: {mention}\n\n{_blockquote(tracks)}"
+    )
 
     if position != 0 or await db.get_call(chat_id):
         return await sent.edit_text(summary)
@@ -168,6 +178,7 @@ async def _play_by_id(pid: str, chat_id: int, mention: str, reply, shuffle: bool
         first_track.file_path = await yt.download(first_track.id, video=False)
 
     await anon.play_media(chat_id=chat_id, message=sent, media=first_track)
+
     if len(tracks) > 1:
         await app.send_message(chat_id=chat_id, text=summary)
 
@@ -229,7 +240,10 @@ async def _cmd_list(m: types.Message):
     for i, pl in enumerate(playlists, 1):
         count = await db.pl_track_count(pl["_id"])
         lines.append(f"<b>{i}.</b> {pl['name'].title()} ({count} songs)")
-    await m.reply_text("<b>Your Playlists</b>\n\n" + "\n".join(lines), reply_markup=_list_buttons(playlists))
+    await m.reply_text(
+        "<b>Your Playlists</b>\n\n" + "\n".join(lines),
+        reply_markup=_list_buttons(playlists),
+    )
 
 
 async def _cmd_create(m: types.Message, name: str):
@@ -237,7 +251,9 @@ async def _cmd_create(m: types.Message, name: str):
     if pl is None:
         existing = await db.pl_get(m.from_user.id, name)
         return await m.reply_text(
-            f"Playlist <b>{name.title()}</b> already exists." if existing else f"Max {MAX_PLAYLISTS} playlists per user."
+            f"Playlist <b>{name.title()}</b> already exists."
+            if existing else
+            f"Max {MAX_PLAYLISTS} playlists per user."
         )
     await m.reply_text(f"Playlist <b>{name.title()}</b> created.")
 
@@ -282,7 +298,11 @@ async def _cmd_view(m: types.Message, name: str):
     if not pl:
         return await m.reply_text(f"Playlist <b>{name.title()}</b> not found.")
     tracks = await db.pl_get_tracks(pl["_id"])
-    header = f"<b>Playlist: {pl['name'].title()}</b>\nOwner: {m.from_user.mention}\nTracks: {len(tracks)}\n\n"
+    header = (
+        f"<b>Playlist: {pl['name'].title()}</b>\n"
+        f"Owner: {m.from_user.mention}\n"
+        f"Tracks: {len(tracks)}\n\n"
+    )
     body = _blockquote(tracks) if tracks else "<i>No tracks yet.</i>"
     await m.reply_text(header + body, reply_markup=_view_buttons(pl["_id"]))
 
@@ -317,8 +337,12 @@ async def _cmd_export(m: types.Message, name: str):
         return await m.reply_text(f"Playlist <b>{name.title()}</b> not found.")
     tracks = await db.pl_get_tracks(pl["_id"])
     data = json.dumps(
-        {"playlist": pl["name"], "tracks": [{"title": t["title"], "url": t["url"], "duration": t["duration"]} for t in tracks]},
-        indent=2, ensure_ascii=False,
+        {
+            "playlist": pl["name"],
+            "tracks": [{"title": t["title"], "url": t["url"], "duration": t["duration"]} for t in tracks],
+        },
+        indent=2,
+        ensure_ascii=False,
     )
     fname = f"/tmp/pl_{pl['_id'][:8]}.json"
     with open(fname, "w", encoding="utf-8") as f:
@@ -333,7 +357,9 @@ async def _cmd_share(m: types.Message, name: str):
     me = await app.get_me()
     link = f"https://t.me/{me.username}?start=pl_{pl['_id']}"
     await m.reply_text(
-        f"<b>Share: {pl['name'].title()}</b>\nTracks: {await db.pl_track_count(pl['_id'])}\n\n<code>{link}</code>"
+        f"<b>Share: {pl['name'].title()}</b>\n"
+        f"Tracks: {await db.pl_track_count(pl['_id'])}\n\n"
+        f"<code>{link}</code>"
     )
 
 
@@ -356,25 +382,25 @@ async def cb_view(_, cq: types.CallbackQuery):
 @app.on_callback_query(filters.regex(r"^pl_play_(.+)$"))
 async def cb_play(_, cq: types.CallbackQuery):
     try:
+        await cq.answer()
         pid = cq.matches[0].group(1)
         if not await db.pl_get_by_id(pid):
-            return await cq.answer("Playlist not found.", show_alert=True)
-        await cq.answer("Loading playlist...")
+            return await cq.message.reply_text("Playlist not found.")
         await _play_by_id(pid, cq.message.chat.id, cq.from_user.mention, cq.message.reply_text)
     except Exception as e:
-        await cq.answer(f"Error: {e}", show_alert=True)
+        await cq.message.reply_text(f"Error: {e}")
 
 
 @app.on_callback_query(filters.regex(r"^pl_shuffle_(.+)$"))
 async def cb_shuffle(_, cq: types.CallbackQuery):
     try:
+        await cq.answer()
         pid = cq.matches[0].group(1)
         if not await db.pl_get_by_id(pid):
-            return await cq.answer("Playlist not found.", show_alert=True)
-        await cq.answer("Shuffling...")
+            return await cq.message.reply_text("Playlist not found.")
         await _play_by_id(pid, cq.message.chat.id, cq.from_user.mention, cq.message.reply_text, shuffle=True)
     except Exception as e:
-        await cq.answer(f"Error: {e}", show_alert=True)
+        await cq.message.reply_text(f"Error: {e}")
 
 
 @app.on_callback_query(filters.regex(r"^pl_del_(.+)$"))
