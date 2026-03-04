@@ -273,13 +273,14 @@ async def cb_view(_, cq: types.CallbackQuery):
 
 
 @app.on_callback_query(filters.regex(r"^pl_play_(.+)$"))
-@checkUB
 async def cb_play(_, cq: types.CallbackQuery):
     try:
         pid = cq.matches[0].group(1)
         pl = await db.pl_get_by_id(pid)
         if not pl:
             return await cq.answer("Playlist not found.", show_alert=True)
+        if not await db.get_assistant(cq.message.chat.id):
+            return await cq.answer("No assistant in this chat.", show_alert=True)
         await cq.answer("Loading playlist...")
 
         class _M:
@@ -294,13 +295,14 @@ async def cb_play(_, cq: types.CallbackQuery):
 
 
 @app.on_callback_query(filters.regex(r"^pl_shuffle_(.+)$"))
-@checkUB
 async def cb_shuffle(_, cq: types.CallbackQuery):
     try:
         pid = cq.matches[0].group(1)
         pl = await db.pl_get_by_id(pid)
         if not pl:
             return await cq.answer("Playlist not found.", show_alert=True)
+        if not await db.get_assistant(cq.message.chat.id):
+            return await cq.answer("No assistant in this chat.", show_alert=True)
         await cq.answer("Shuffling...")
 
         class _M:
