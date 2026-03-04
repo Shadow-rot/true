@@ -10,10 +10,7 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from anony import anon, app, config, db, lang, queue, yt
 from anony.core.mongo import MAX_PLAYLISTS, MAX_TRACKS
-from anony.helpers._play import checkUB
 
-
-# ── HELPERS ───────────────────────────────────────────────────────────────────
 
 def _fmt(sec: int) -> str:
     m, s = divmod(sec, 60)
@@ -32,15 +29,14 @@ def _blockquote(tracks: list[dict]) -> str:
 
 
 def _list_buttons(playlists: list[dict]) -> InlineKeyboardMarkup:
-    rows = []
-    for pl in playlists:
-        pid = pl["_id"]
-        rows.append([
-            InlineKeyboardButton(f"play  {pl['name'].title()}", callback_data=f"pl_play_{pid}"),
-            InlineKeyboardButton("view", callback_data=f"pl_view_{pid}"),
-            InlineKeyboardButton("delete", callback_data=f"pl_del_{pid}"),
-        ])
-    return InlineKeyboardMarkup(rows)
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(f"play  {pl['name'].title()}", callback_data=f"pl_play_{pl['_id']}"),
+            InlineKeyboardButton("view", callback_data=f"pl_view_{pl['_id']}"),
+            InlineKeyboardButton("delete", callback_data=f"pl_del_{pl['_id']}"),
+        ]
+        for pl in playlists
+    ])
 
 
 def _view_buttons(pid: str) -> InlineKeyboardMarkup:
@@ -58,40 +54,70 @@ def _confirm_buttons(pid: str) -> InlineKeyboardMarkup:
     ]])
 
 
-# ── MAIN COMMAND ──────────────────────────────────────────────────────────────
+async def _play_by_id(pid: str, chat_id: int, mention: str, reply, shuffle: bool = False):
+    pl = await db.pl_get_by_id(pid)
+    if not pl:
+        return await reply("Playlist not found.")
+    tracks = await db.pl_get_tracks(pid)
+    if not tracks:
+        return await reply("Playlist is empty.")
+    if shuffle:
+        random.shuffle(tracks)
+    sent = await reply("Loading playlist...")
+    first_track = await yt.search(tracks[0]["url"], sent.id, video=False)
+    if not first_track:
+        return await sent.edit_text(f"Could not fetch track. Support: {config.SUPPORT_CHAT}")
+    first_track.user = mention
+    position = queue.add(chat_id, first_track)
+    for t in tracks[1:]:
+        tr = await yt.search(t["url"], video=False)
+        if tr:
+            tr.user = mention
+            queue.add(chat_id, tr)
+    label = "Playlist shuffled and queued" if shuffle else "Playlist queued"
+    summary = f"{label}\n\n<b>{pl['name'].title()}</b>\nSongs: {len(tracks)}\nBy: {mention}\n\n{_blockquote(tracks)}"
+    if position != 0 or await db.get_call(chat_id):
+        return await sent.edit_text(summary)
+    if not first_track.file_path:
+        await sent.edit_text("Downloading...")
+        first_track.file_path = await yt.download(first_track.id, video=False)
+    await anon.play_media(chat_id=chat_id, message=sent, media=first_track)
+    if len(tracks) > 1:
+        await app.send_message(chat_id=chat_id, text=summary)
+
 
 @app.on_message(filters.command("playlist") & ~app.bl_users)
 @lang.language()
 async def playlist_hndlr(_, m: types.Message) -> None:
     args = m.command[1:]
     if not args:
-        return await _list(m)
+        return await _cmd_list(m)
     sub = args[0].lower()
     try:
         if sub == "create" and len(args) >= 2:
-            await _create(m, args[1])
+            await _cmd_create(m, args[1])
         elif sub == "add" and len(args) >= 3:
-            await _add(m, args[1], " ".join(args[2:]))
+            await _cmd_add(m, args[1], " ".join(args[2:]))
         elif sub == "remove" and len(args) == 3:
-            await _remove(m, args[1], int(args[2]))
+            await _cmd_remove(m, args[1], int(args[2]))
         elif sub == "delete" and len(args) == 2:
-            await _delete(m, args[1])
+            await _cmd_delete(m, args[1])
         elif sub == "view" and len(args) == 2:
-            await _view(m, args[1])
+            await _cmd_view(m, args[1])
         elif sub == "play" and len(args) == 2:
-            await _play(m, args[1])
+            await _cmd_play(m, args[1])
         elif sub == "shuffle" and len(args) == 2:
-            await _play(m, args[1], shuffle=True)
+            await _cmd_play(m, args[1], shuffle=True)
         elif sub == "import" and len(args) >= 3:
-            await _import(m, args[1], args[2])
+            await _cmd_import(m, args[1], args[2])
         elif sub == "export" and len(args) == 2:
-            await _export(m, args[1])
+            await _cmd_export(m, args[1])
         elif sub == "share" and len(args) == 2:
-            await _share(m, args[1])
+            await _cmd_share(m, args[1])
         else:
             await m.reply_text(
                 "<b>Playlist Commands</b>\n\n"
-                "/playlist — list playlists\n"
+                "/playlist\n"
                 "/playlist create &lt;name&gt;\n"
                 "/playlist add &lt;name&gt; &lt;song/url&gt;\n"
                 "/playlist remove &lt;name&gt; &lt;pos&gt;\n"
@@ -109,32 +135,28 @@ async def playlist_hndlr(_, m: types.Message) -> None:
         await m.reply_text(f"Error: {e}")
 
 
-# ── COMMAND HANDLERS ──────────────────────────────────────────────────────────
-
-async def _list(m: types.Message):
+async def _cmd_list(m: types.Message):
     playlists = await db.pl_list(m.from_user.id)
     if not playlists:
-        return await m.reply_text("No playlists. Create one with /playlist create &lt;name&gt;")
+        return await m.reply_text("No playlists. Use /playlist create &lt;name&gt;")
     lines = []
     for i, pl in enumerate(playlists, 1):
         count = await db.pl_track_count(pl["_id"])
         lines.append(f"<b>{i}.</b> {pl['name'].title()} ({count} songs)")
-    await m.reply_text(
-        "<b>Your Playlists</b>\n\n" + "\n".join(lines),
-        reply_markup=_list_buttons(playlists),
-    )
+    await m.reply_text("<b>Your Playlists</b>\n\n" + "\n".join(lines), reply_markup=_list_buttons(playlists))
 
 
-async def _create(m: types.Message, name: str):
+async def _cmd_create(m: types.Message, name: str):
     pl = await db.pl_create(m.from_user.id, name)
     if pl is None:
         existing = await db.pl_get(m.from_user.id, name)
-        msg = f"Playlist <b>{name.title()}</b> already exists." if existing else f"Max {MAX_PLAYLISTS} playlists per user."
-        return await m.reply_text(msg)
+        return await m.reply_text(
+            f"Playlist <b>{name.title()}</b> already exists." if existing else f"Max {MAX_PLAYLISTS} playlists per user."
+        )
     await m.reply_text(f"Playlist <b>{name.title()}</b> created.")
 
 
-async def _add(m: types.Message, name: str, query: str):
+async def _cmd_add(m: types.Message, name: str, query: str):
     pl = await db.pl_get(m.from_user.id, name)
     if not pl:
         return await m.reply_text(f"Playlist <b>{name.title()}</b> not found.")
@@ -150,7 +172,7 @@ async def _add(m: types.Message, name: str, query: str):
     await sent.edit_text(f"Added to <b>{name.title()}</b>: {track.title} - {_fmt(track.duration_sec)}")
 
 
-async def _remove(m: types.Message, name: str, pos: int):
+async def _cmd_remove(m: types.Message, name: str, pos: int):
     pl = await db.pl_get(m.from_user.id, name)
     if not pl:
         return await m.reply_text(f"Playlist <b>{name.title()}</b> not found.")
@@ -159,7 +181,7 @@ async def _remove(m: types.Message, name: str, pos: int):
     await m.reply_text(f"Track #{pos} removed from <b>{name.title()}</b>.")
 
 
-async def _delete(m: types.Message, name: str):
+async def _cmd_delete(m: types.Message, name: str):
     pl = await db.pl_get(m.from_user.id, name)
     if not pl:
         return await m.reply_text(f"Playlist <b>{name.title()}</b> not found.")
@@ -169,7 +191,7 @@ async def _delete(m: types.Message, name: str):
     )
 
 
-async def _view(m: types.Message, name: str):
+async def _cmd_view(m: types.Message, name: str):
     pl = await db.pl_get(m.from_user.id, name)
     if not pl:
         return await m.reply_text(f"Playlist <b>{name.title()}</b> not found.")
@@ -179,40 +201,14 @@ async def _view(m: types.Message, name: str):
     await m.reply_text(header + body, reply_markup=_view_buttons(pl["_id"]))
 
 
-async def _play(m: types.Message, name: str, shuffle: bool = False):
+async def _cmd_play(m: types.Message, name: str, shuffle: bool = False):
     pl = await db.pl_get(m.from_user.id, name)
     if not pl:
         return await m.reply_text(f"Playlist <b>{name.title()}</b> not found.")
-    tracks = await db.pl_get_tracks(pl["_id"])
-    if not tracks:
-        return await m.reply_text("Playlist is empty.")
-    if shuffle:
-        random.shuffle(tracks)
-    sent = await m.reply_text("Loading playlist...")
-    first_track = await yt.search(tracks[0]["url"], sent.id, video=False)
-    if not first_track:
-        return await sent.edit_text(f"Could not fetch track. Support: {config.SUPPORT_CHAT}")
-    first_track.user = m.from_user.mention
-    position = queue.add(m.chat.id, first_track)
-    for t in tracks[1:]:
-        tr = await yt.search(t["url"], video=False)
-        if tr:
-            tr.user = m.from_user.mention
-            queue.add(m.chat.id, tr)
-    label = "Playlist shuffled and queued" if shuffle else "Playlist queued"
-    body = _blockquote(tracks)
-    summary = f"{label}\n\n<b>{pl['name'].title()}</b>\nSongs: {len(tracks)}\nBy: {m.from_user.mention}\n\n{body}"
-    if position != 0 or await db.get_call(m.chat.id):
-        return await sent.edit_text(summary)
-    if not first_track.file_path:
-        await sent.edit_text("Downloading...")
-        first_track.file_path = await yt.download(first_track.id, video=False)
-    await anon.play_media(chat_id=m.chat.id, message=sent, media=first_track)
-    if len(tracks) > 1:
-        await app.send_message(chat_id=m.chat.id, text=summary)
+    await _play_by_id(pl["_id"], m.chat.id, m.from_user.mention, m.reply_text, shuffle)
 
 
-async def _import(m: types.Message, name: str, url: str):
+async def _cmd_import(m: types.Message, name: str, url: str):
     if "playlist" not in url:
         return await m.reply_text("Provide a valid YouTube playlist URL.")
     pl = await db.pl_get(m.from_user.id, name) or await db.pl_create(m.from_user.id, name)
@@ -222,14 +218,14 @@ async def _import(m: types.Message, name: str, url: str):
     yt_tracks = await yt.playlist(config.PLAYLIST_LIMIT, m.from_user.mention, url, video=False)
     if not yt_tracks:
         return await sent.edit_text("Could not fetch YouTube playlist.")
-    added = 0
-    for t in yt_tracks:
-        if await db.pl_add_track(pl["_id"], t.title, t.duration_sec, t.url, t.id, m.from_user.id):
-            added += 1
+    added = sum(
+        1 for t in yt_tracks
+        if await db.pl_add_track(pl["_id"], t.title, t.duration_sec, t.url, t.id, m.from_user.id)
+    )
     await sent.edit_text(f"Imported {added} tracks into <b>{name.title()}</b>.")
 
 
-async def _export(m: types.Message, name: str):
+async def _cmd_export(m: types.Message, name: str):
     pl = await db.pl_get(m.from_user.id, name)
     if not pl:
         return await m.reply_text(f"Playlist <b>{name.title()}</b> not found.")
@@ -244,17 +240,16 @@ async def _export(m: types.Message, name: str):
     await m.reply_document(fname, caption=f"Export: <b>{name.title()}</b> - {len(tracks)} tracks")
 
 
-async def _share(m: types.Message, name: str):
+async def _cmd_share(m: types.Message, name: str):
     pl = await db.pl_get(m.from_user.id, name)
     if not pl:
         return await m.reply_text(f"Playlist <b>{name.title()}</b> not found.")
-    count = await db.pl_track_count(pl["_id"])
     me = await app.get_me()
     link = f"https://t.me/{me.username}?start=pl_{pl['_id']}"
-    await m.reply_text(f"<b>Share: {pl['name'].title()}</b>\nTracks: {count}\n\n<code>{link}</code>")
+    await m.reply_text(
+        f"<b>Share: {pl['name'].title()}</b>\nTracks: {await db.pl_track_count(pl['_id'])}\n\n<code>{link}</code>"
+    )
 
-
-# ── CALLBACKS ─────────────────────────────────────────────────────────────────
 
 @app.on_callback_query(filters.regex(r"^pl_view_(.+)$"))
 async def cb_view(_, cq: types.CallbackQuery):
@@ -276,20 +271,10 @@ async def cb_view(_, cq: types.CallbackQuery):
 async def cb_play(_, cq: types.CallbackQuery):
     try:
         pid = cq.matches[0].group(1)
-        pl = await db.pl_get_by_id(pid)
-        if not pl:
+        if not await db.pl_get_by_id(pid):
             return await cq.answer("Playlist not found.", show_alert=True)
-        if not await db.get_assistant(cq.message.chat.id):
-            return await cq.answer("No assistant in this chat.", show_alert=True)
         await cq.answer("Loading playlist...")
-
-        class _M:
-            chat = cq.message.chat
-            from_user = cq.from_user
-            lang = getattr(cq.message, "lang", {})
-            async def reply_text(self, *a, **kw): return await cq.message.reply_text(*a, **kw)
-
-        await _play(_M(), pl["name"])
+        await _play_by_id(pid, cq.message.chat.id, cq.from_user.mention, cq.message.reply_text)
     except Exception as e:
         await cq.answer(f"Error: {e}", show_alert=True)
 
@@ -298,20 +283,10 @@ async def cb_play(_, cq: types.CallbackQuery):
 async def cb_shuffle(_, cq: types.CallbackQuery):
     try:
         pid = cq.matches[0].group(1)
-        pl = await db.pl_get_by_id(pid)
-        if not pl:
+        if not await db.pl_get_by_id(pid):
             return await cq.answer("Playlist not found.", show_alert=True)
-        if not await db.get_assistant(cq.message.chat.id):
-            return await cq.answer("No assistant in this chat.", show_alert=True)
         await cq.answer("Shuffling...")
-
-        class _M:
-            chat = cq.message.chat
-            from_user = cq.from_user
-            lang = getattr(cq.message, "lang", {})
-            async def reply_text(self, *a, **kw): return await cq.message.reply_text(*a, **kw)
-
-        await _play(_M(), pl["name"], shuffle=True)
+        await _play_by_id(pid, cq.message.chat.id, cq.from_user.mention, cq.message.reply_text, shuffle=True)
     except Exception as e:
         await cq.answer(f"Error: {e}", show_alert=True)
 
