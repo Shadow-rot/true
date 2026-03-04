@@ -3,6 +3,7 @@
 # This file is part of AnonXMusic
 
 import json
+import re
 import random
 
 from pyrogram import filters, types
@@ -53,6 +54,11 @@ def _confirm_buttons(pid: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton("confirm delete", callback_data=f"pl_delconfirm_{pid}"),
         InlineKeyboardButton("cancel", callback_data=f"pl_delcancel_{pid}"),
     ]])
+
+
+def _pid(cq: types.CallbackQuery) -> str | None:
+    m = re.search(r"^pl_\w+_(.+)$", cq.data)
+    return m.group(1) if m else None
 
 
 async def _play_by_id(pid: str, chat_id: int, mention: str, reply, shuffle: bool = False):
@@ -283,10 +289,12 @@ async def _cmd_share(m: types.Message, name: str):
     )
 
 
-@app.on_callback_query(filters.regex(r"^pl_view_(.+)$"))
+@app.on_callback_query(filters.regex(r"^pl_view_"))
 async def cb_view(_, cq: types.CallbackQuery):
     try:
-        pid = cq.matches[0].group(1)
+        pid = _pid(cq)
+        if not pid:
+            return await cq.answer("Invalid callback.", show_alert=True)
         pl = await db.pl_get_by_id(pid)
         if not pl:
             return await cq.answer("Playlist not found.", show_alert=True)
@@ -299,11 +307,13 @@ async def cb_view(_, cq: types.CallbackQuery):
         await cq.answer(f"Error: {e}", show_alert=True)
 
 
-@app.on_callback_query(filters.regex(r"^pl_play_(.+)$"))
+@app.on_callback_query(filters.regex(r"^pl_play_"))
 async def cb_play(_, cq: types.CallbackQuery):
     await cq.answer()
     try:
-        pid = cq.matches[0].group(1)
+        pid = _pid(cq)
+        if not pid:
+            return await cq.message.reply_text("Invalid callback.")
         if not await db.pl_get_by_id(pid):
             return await cq.message.reply_text("Playlist not found.")
         await _play_by_id(pid, cq.message.chat.id, cq.from_user.mention, cq.message.reply_text)
@@ -311,11 +321,13 @@ async def cb_play(_, cq: types.CallbackQuery):
         await cq.message.reply_text(f"Error: {e}")
 
 
-@app.on_callback_query(filters.regex(r"^pl_shuffle_(.+)$"))
+@app.on_callback_query(filters.regex(r"^pl_shuffle_"))
 async def cb_shuffle(_, cq: types.CallbackQuery):
     await cq.answer()
     try:
-        pid = cq.matches[0].group(1)
+        pid = _pid(cq)
+        if not pid:
+            return await cq.message.reply_text("Invalid callback.")
         if not await db.pl_get_by_id(pid):
             return await cq.message.reply_text("Playlist not found.")
         await _play_by_id(pid, cq.message.chat.id, cq.from_user.mention, cq.message.reply_text, shuffle=True)
@@ -323,10 +335,12 @@ async def cb_shuffle(_, cq: types.CallbackQuery):
         await cq.message.reply_text(f"Error: {e}")
 
 
-@app.on_callback_query(filters.regex(r"^pl_del_(.+)$"))
+@app.on_callback_query(filters.regex(r"^pl_del_"))
 async def cb_del_prompt(_, cq: types.CallbackQuery):
     try:
-        pid = cq.matches[0].group(1)
+        pid = _pid(cq)
+        if not pid:
+            return await cq.answer("Invalid callback.", show_alert=True)
         pl = await db.pl_get_by_id(pid)
         if not pl:
             return await cq.answer("Playlist not found.", show_alert=True)
@@ -341,10 +355,12 @@ async def cb_del_prompt(_, cq: types.CallbackQuery):
         await cq.answer(f"Error: {e}", show_alert=True)
 
 
-@app.on_callback_query(filters.regex(r"^pl_delconfirm_(.+)$"))
+@app.on_callback_query(filters.regex(r"^pl_delconfirm_"))
 async def cb_del_confirm(_, cq: types.CallbackQuery):
     try:
-        pid = cq.matches[0].group(1)
+        pid = _pid(cq)
+        if not pid:
+            return await cq.answer("Invalid callback.", show_alert=True)
         pl = await db.pl_get_by_id(pid)
         if not pl:
             return await cq.answer("Playlist not found.", show_alert=True)
@@ -357,10 +373,12 @@ async def cb_del_confirm(_, cq: types.CallbackQuery):
         await cq.answer(f"Error: {e}", show_alert=True)
 
 
-@app.on_callback_query(filters.regex(r"^pl_delcancel_(.+)$"))
+@app.on_callback_query(filters.regex(r"^pl_delcancel_"))
 async def cb_del_cancel(_, cq: types.CallbackQuery):
     try:
-        pid = cq.matches[0].group(1)
+        pid = _pid(cq)
+        if not pid:
+            return await cq.answer()
         pl = await db.pl_get_by_id(pid)
         if not pl:
             return await cq.answer()
