@@ -86,7 +86,7 @@ async def _play_by_id(pid: str, chat_id: int, mention: str, reply, shuffle: bool
     position = queue.add(chat_id, first_track)
 
     for t in tracks[1:]:
-        tr = await yt.search(t["url"], video=False)
+        tr = await yt.search(t["url"], sent.id, video=False)
         if tr:
             tr.user = mention
             queue.add(chat_id, tr)
