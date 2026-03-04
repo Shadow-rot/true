@@ -2,20 +2,20 @@
 # Licensed under the MIT License.
 # This file is part of AnonXMusic
 
-
 from random import randint
 from time import time
+from uuid import uuid4
 
 from pymongo import AsyncMongoClient
 
 from anony import config, logger, userbot
 
+MAX_PLAYLISTS = 10
+MAX_TRACKS = 200
+
 
 class MongoDB:
     def __init__(self):
-        """
-        Initialize the MongoDB connection.
-        """
         self.mongo = AsyncMongoClient(config.MONGO_URL, serverSelectionTimeoutMS=12500)
         self.db = self.mongo.Anon
 
@@ -43,12 +43,10 @@ class MongoDB:
         self.users = []
         self.usersdb = self.db.users
 
-    async def connect(self) -> None:
-        """Check if we can connect to the database.
+        self.playlistsdb = self.db.playlists
+        self.tracksdb = self.db.playlist_tracks
 
-        Raises:
-            SystemExit: If the connection to the database fails.
-        """
+    async def connect(self) -> None:
         try:
             start = time()
             await self.mongo.admin.command("ping")
@@ -58,11 +56,11 @@ class MongoDB:
             raise SystemExit(f"Database connection failed: {type(e).__name__}") from e
 
     async def close(self) -> None:
-        """Close the connection to the database."""
         await self.mongo.close()
         logger.info("Database connection closed.")
 
-    # CACHE
+    # ── CACHE ────────────────────────────────────────────────────────────────
+
     async def get_call(self, chat_id: int) -> bool:
         return chat_id in self.active_calls
 
@@ -79,12 +77,12 @@ class MongoDB:
 
     async def get_admins(self, chat_id: int, reload: bool = False) -> list[int]:
         from anony.helpers._admins import reload_admins
-
         if chat_id not in self.admin_list or reload:
             self.admin_list[chat_id] = await reload_admins(chat_id)
         return self.admin_list[chat_id]
 
-    # AUTH METHODS
+    # ── AUTH ─────────────────────────────────────────────────────────────────
+
     async def _get_auth(self, chat_id: int) -> set[int]:
         if chat_id not in self.auth:
             doc = await self.authdb.find_one({"_id": chat_id}) or {}
@@ -106,42 +104,34 @@ class MongoDB:
         users = await self._get_auth(chat_id)
         if user_id in users:
             users.discard(user_id)
-            await self.authdb.update_one(
-                {"_id": chat_id}, {"$pull": {"user_ids": user_id}}
-            )
+            await self.authdb.update_one({"_id": chat_id}, {"$pull": {"user_ids": user_id}})
 
     async def get_auths(self, chat_id: int) -> list[int]:
         return list(await self._get_auth(chat_id))
 
-    # ASSISTANT METHODS
+    # ── ASSISTANT ─────────────────────────────────────────────────────────────
+
     async def set_assistant(self, chat_id: int) -> int:
         num = randint(1, len(userbot.clients))
-        await self.assistantdb.update_one(
-            {"_id": chat_id},
-            {"$set": {"num": num}},
-            upsert=True,
-        )
+        await self.assistantdb.update_one({"_id": chat_id}, {"$set": {"num": num}}, upsert=True)
         self.assistant[chat_id] = num
         return num
 
     async def get_assistant(self, chat_id: int):
         from anony import anon
-
         if chat_id not in self.assistant:
             doc = await self.assistantdb.find_one({"_id": chat_id})
             num = doc["num"] if doc else await self.set_assistant(chat_id)
             self.assistant[chat_id] = num
-
         return anon.clients[self.assistant[chat_id] - 1]
 
     async def get_client(self, chat_id: int):
         if chat_id not in self.assistant:
             await self.get_assistant(chat_id)
-        return {1: userbot.one, 2: userbot.two, 3: userbot.three}.get(
-            self.assistant[chat_id]
-        )
+        return {1: userbot.one, 2: userbot.two, 3: userbot.three}.get(self.assistant[chat_id])
 
-    # BLACKLIST METHODS
+    # ── BLACKLIST ─────────────────────────────────────────────────────────────
+
     async def add_blacklist(self, chat_id: int) -> None:
         if str(chat_id).startswith("-"):
             self.blacklisted.append(chat_id)
@@ -155,14 +145,8 @@ class MongoDB:
     async def del_blacklist(self, chat_id: int) -> None:
         if str(chat_id).startswith("-"):
             self.blacklisted.remove(chat_id)
-            return await self.cache.update_one(
-                {"_id": "bl_chats"},
-                {"$pull": {"chat_ids": chat_id}},
-            )
-        await self.cache.update_one(
-            {"_id": "bl_users"},
-            {"$pull": {"user_ids": chat_id}},
-        )
+            return await self.cache.update_one({"_id": "bl_chats"}, {"$pull": {"chat_ids": chat_id}})
+        await self.cache.update_one({"_id": "bl_users"}, {"$pull": {"user_ids": chat_id}})
 
     async def get_blacklisted(self, chat: bool = False) -> list[int]:
         if chat:
@@ -173,7 +157,8 @@ class MongoDB:
         doc = await self.cache.find_one({"_id": "bl_users"})
         return doc.get("user_ids", []) if doc else []
 
-    # CHAT METHODS
+    # ── CHATS ─────────────────────────────────────────────────────────────────
+
     async def is_chat(self, chat_id: int) -> bool:
         return chat_id in self.chats
 
@@ -192,7 +177,8 @@ class MongoDB:
             self.chats.extend([chat["_id"] async for chat in self.chatsdb.find()])
         return self.chats
 
-    # COMMAND DELETE
+    # ── CMD DELETE ────────────────────────────────────────────────────────────
+
     async def get_cmd_delete(self, chat_id: int) -> bool:
         if chat_id not in self.cmd_delete:
             doc = await self.chatsdb.find_one({"_id": chat_id})
@@ -205,19 +191,12 @@ class MongoDB:
             self.cmd_delete.append(chat_id)
         else:
             self.cmd_delete.remove(chat_id)
-        await self.chatsdb.update_one(
-            {"_id": chat_id},
-            {"$set": {"cmd_delete": delete}},
-            upsert=True,
-        )
+        await self.chatsdb.update_one({"_id": chat_id}, {"$set": {"cmd_delete": delete}}, upsert=True)
 
-    # LANGUAGE METHODS
+    # ── LANGUAGE ──────────────────────────────────────────────────────────────
+
     async def set_lang(self, chat_id: int, lang_code: str):
-        await self.langdb.update_one(
-            {"_id": chat_id},
-            {"$set": {"lang": lang_code}},
-            upsert=True,
-        )
+        await self.langdb.update_one({"_id": chat_id}, {"$set": {"lang": lang_code}}, upsert=True)
         self.lang[chat_id] = lang_code
 
     async def get_lang(self, chat_id: int) -> str:
@@ -226,7 +205,8 @@ class MongoDB:
             self.lang[chat_id] = doc["lang"] if doc else config.LANG_CODE
         return self.lang[chat_id]
 
-    # LOGGER METHODS
+    # ── LOGGER ────────────────────────────────────────────────────────────────
+
     async def is_logger(self) -> bool:
         return self.logger
 
@@ -238,13 +218,10 @@ class MongoDB:
 
     async def set_logger(self, status: bool) -> None:
         self.logger = status
-        await self.cache.update_one(
-            {"_id": "logger"},
-            {"$set": {"status": status}},
-            upsert=True,
-        )
+        await self.cache.update_one({"_id": "logger"}, {"$set": {"status": status}}, upsert=True)
 
-    # PLAY MODE METHODS
+    # ── PLAY MODE ─────────────────────────────────────────────────────────────
+
     async def get_play_mode(self, chat_id: int) -> bool:
         if chat_id not in self.admin_play:
             doc = await self.chatsdb.find_one({"_id": chat_id})
@@ -258,27 +235,25 @@ class MongoDB:
         else:
             self.admin_play.append(chat_id)
         await self.chatsdb.update_one(
-            {"_id": chat_id},
-            {"$set": {"admin_play": not remove}},
-            upsert=True,
+            {"_id": chat_id}, {"$set": {"admin_play": not remove}}, upsert=True
         )
 
-    # SUDO METHODS
+    # ── SUDO ──────────────────────────────────────────────────────────────────
+
     async def add_sudo(self, user_id: int) -> None:
         await self.cache.update_one(
             {"_id": "sudoers"}, {"$addToSet": {"user_ids": user_id}}, upsert=True
         )
 
     async def del_sudo(self, user_id: int) -> None:
-        await self.cache.update_one(
-            {"_id": "sudoers"}, {"$pull": {"user_ids": user_id}}
-        )
+        await self.cache.update_one({"_id": "sudoers"}, {"$pull": {"user_ids": user_id}})
 
     async def get_sudoers(self) -> list[int]:
         doc = await self.cache.find_one({"_id": "sudoers"})
         return doc.get("user_ids", []) if doc else []
 
-    # USER METHODS
+    # ── USERS ─────────────────────────────────────────────────────────────────
+
     async def is_user(self, user_id: int) -> bool:
         return user_id in self.users
 
@@ -297,9 +272,89 @@ class MongoDB:
             self.users.extend([user["_id"] async for user in self.usersdb.find()])
         return self.users
 
+    # ── PLAYLIST ──────────────────────────────────────────────────────────────
+
+    async def pl_create(self, user_id: int, name: str) -> dict | None:
+        try:
+            count = await self.playlistsdb.count_documents({"user_id": user_id})
+            if count >= MAX_PLAYLISTS:
+                return None
+            doc = {"_id": str(uuid4()), "user_id": user_id, "name": name.lower()}
+            await self.playlistsdb.insert_one(doc)
+            return doc
+        except Exception:
+            return None
+
+    async def pl_get(self, user_id: int, name: str) -> dict | None:
+        try:
+            return await self.playlistsdb.find_one({"user_id": user_id, "name": name.lower()})
+        except Exception:
+            return None
+
+    async def pl_get_by_id(self, pid: str) -> dict | None:
+        try:
+            return await self.playlistsdb.find_one({"_id": pid})
+        except Exception:
+            return None
+
+    async def pl_list(self, user_id: int) -> list[dict]:
+        try:
+            return await self.playlistsdb.find({"user_id": user_id}).to_list(MAX_PLAYLISTS)
+        except Exception:
+            return []
+
+    async def pl_delete(self, pid: str) -> None:
+        try:
+            await self.playlistsdb.delete_one({"_id": pid})
+            await self.tracksdb.delete_many({"playlist_id": pid})
+        except Exception:
+            pass
+
+    async def pl_add_track(self, pid: str, title: str, duration: int, url: str, video_id: str, added_by: int) -> dict | None:
+        try:
+            count = await self.tracksdb.count_documents({"playlist_id": pid})
+            if count >= MAX_TRACKS:
+                return None
+            doc = {
+                "_id": str(uuid4()),
+                "playlist_id": pid,
+                "title": title,
+                "duration": duration,
+                "url": url,
+                "video_id": video_id,
+                "added_by": added_by,
+            }
+            await self.tracksdb.insert_one(doc)
+            return doc
+        except Exception:
+            return None
+
+    async def pl_get_tracks(self, pid: str) -> list[dict]:
+        try:
+            return await self.tracksdb.find({"playlist_id": pid}).to_list(MAX_TRACKS)
+        except Exception:
+            return []
+
+    async def pl_remove_track(self, pid: str, position: int) -> bool:
+        try:
+            tracks = await self.pl_get_tracks(pid)
+            if position < 1 or position > len(tracks):
+                return False
+            await self.tracksdb.delete_one({"_id": tracks[position - 1]["_id"]})
+            return True
+        except Exception:
+            return False
+
+    async def pl_track_count(self, pid: str) -> int:
+        try:
+            return await self.tracksdb.count_documents({"playlist_id": pid})
+        except Exception:
+            return 0
+
+    # ── MIGRATION / STARTUP ───────────────────────────────────────────────────
+
     async def migrate_coll(self) -> None:
         logger.info("Migrating users and chats from old collections...")
-
         users, musers, mchats = [], [], []
         seen_chats, seen_users = set(), set()
         users.extend([user async for user in self.usersdb.find()])
@@ -307,11 +362,7 @@ class MongoDB:
 
         for user in users:
             _id = user.get("_id")
-            if isinstance(_id, int):
-                user_id = _id
-            else:
-                user_id = int(user.get("user_id"))
-
+            user_id = _id if isinstance(_id, int) else int(user.get("user_id"))
             if user_id in seen_users:
                 continue
             seen_users.add(user_id)
@@ -324,11 +375,7 @@ class MongoDB:
 
         async for chat in self.chatsdb.find():
             _id = chat.get("_id")
-            if isinstance(_id, int):
-                chat_id = _id
-            else:
-                chat_id = int(chat.get("chat_id"))
-
+            chat_id = _id if isinstance(_id, int) else int(chat.get("chat_id"))
             if chat_id in seen_chats:
                 continue
             seen_chats.add(chat_id)
@@ -345,9 +392,10 @@ class MongoDB:
         doc = await self.cache.find_one({"_id": "migrated"})
         if not doc:
             await self.migrate_coll()
-
         await self.get_chats()
         await self.get_users()
         await self.get_blacklisted(True)
         await self.get_logger()
+        await self.playlistsdb.create_index([("user_id", 1), ("name", 1)], unique=True)
+        await self.tracksdb.create_index([("playlist_id", 1)])
         logger.info("Database cache loaded.")
