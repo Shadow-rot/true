@@ -10,6 +10,71 @@ from anony import app, config, db, logger, queue, yt
 from anony.helpers import utils
 
 
+async def ensure_ub_in_chat(chat_id: int, reply) -> bool:
+    if chat_id in db.active_calls:
+        return True
+
+    client = await db.get_client(chat_id)
+    ub_id = client.me.id
+
+    try:
+        member = await app.get_chat_member(chat_id, ub_id)
+        if member.status in (enums.ChatMemberStatus.BANNED, enums.ChatMemberStatus.RESTRICTED):
+            try:
+                await app.unban_chat_member(chat_id=chat_id, user_id=ub_id)
+            except Exception:
+                await reply(
+                    f"Userbot is banned. Ask an admin to unban: "
+                    f"<code>{ub_id}</code> (@{client.me.username or 'N/A'})"
+                )
+                return False
+
+    except errors.ChatAdminRequired:
+        await reply("Bot needs admin rights to manage the userbot.")
+        return False
+
+    except (errors.UserNotParticipant, errors.exceptions.bad_request_400.UserNotParticipant):
+        try:
+            chat = await app.get_chat(chat_id)
+            invite_link = chat.username or chat.invite_link
+            if not invite_link:
+                invite_link = await app.export_chat_invite_link(chat_id)
+        except errors.ChatAdminRequired:
+            await reply("Bot needs invite link permission to add userbot.")
+            return False
+        except Exception as ex:
+            await reply(f"Could not get invite link: {type(ex).__name__}")
+            return False
+
+        msg = await reply("Adding userbot to chat...")
+        await asyncio.sleep(2)
+        try:
+            await client.join_chat(invite_link)
+        except errors.UserAlreadyParticipant:
+            pass
+        except errors.InviteRequestSent:
+            await asyncio.sleep(2)
+            try:
+                await app.approve_chat_join_request(chat_id, ub_id)
+            except errors.HideRequesterMissing:
+                pass
+            except Exception as ex:
+                await msg.edit_text(f"Invite error: {type(ex).__name__}")
+                return False
+        except Exception as ex:
+            logger.error(f"Error joining chat {chat_id}: {ex}")
+            await msg.edit_text(f"Invite error: {type(ex).__name__}")
+            return False
+
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+        await client.resolve_peer(chat_id)
+
+    return True
+
+
 def checkUB(play):
     async def wrapper(_, m: types.Message):
         if not m.from_user:
