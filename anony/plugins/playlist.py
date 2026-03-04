@@ -2,15 +2,15 @@
 # Licensed under the MIT License.
 # This file is part of AnonXMusic
 
-import asyncio
 import json
 import random
 
-from pyrogram import enums, errors, filters, types
+from pyrogram import filters, types
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from anony import anon, app, config, db, lang, queue, yt
 from anony.core.mongo import MAX_PLAYLISTS, MAX_TRACKS
+from anony.helpers._play import ensure_ub_in_chat
 
 
 def _fmt(sec: int) -> str:
@@ -55,87 +55,8 @@ def _confirm_buttons(pid: str) -> InlineKeyboardMarkup:
     ]])
 
 
-async def _ensure_ub(chat_id: int, reply) -> bool:
-    if chat_id in db.active_calls:
-        return True
-
-    client = await db.get_client(chat_id)
-
-    if client is None:
-        await reply("No userbot configured for this chat.")
-        return False
-
-    if client.me is None:
-        await reply("Userbot is not started yet. Try again in a moment.")
-        return False
-
-    ub_id = client.me.id
-
-    try:
-        member = await app.get_chat_member(chat_id, ub_id)
-        if member.status in (enums.ChatMemberStatus.BANNED, enums.ChatMemberStatus.RESTRICTED):
-            try:
-                await app.unban_chat_member(chat_id=chat_id, user_id=ub_id)
-            except Exception:
-                await reply(f"Userbot is banned in this chat. Unban user ID: <code>{ub_id}</code>")
-                return False
-
-    except errors.ChatAdminRequired:
-        await reply("Bot needs admin rights to manage the userbot.")
-        return False
-
-    except (errors.UserNotParticipant, errors.exceptions.bad_request_400.UserNotParticipant):
-        try:
-            chat = await app.get_chat(chat_id)
-            invite_link = chat.username or chat.invite_link
-            if not invite_link:
-                invite_link = await app.export_chat_invite_link(chat_id)
-        except errors.ChatAdminRequired:
-            await reply("Bot needs admin rights to invite the userbot.")
-            return False
-        except Exception as ex:
-            await reply(f"Could not get invite link: {type(ex).__name__}")
-            return False
-
-        msg = await reply("Inviting userbot to chat...")
-        await asyncio.sleep(2)
-
-        try:
-            await client.join_chat(invite_link)
-        except errors.UserAlreadyParticipant:
-            pass
-        except errors.InviteRequestSent:
-            await asyncio.sleep(2)
-            try:
-                await app.approve_chat_join_request(chat_id, ub_id)
-            except errors.HideRequesterMissing:
-                pass
-            except Exception as ex:
-                await msg.edit_text(f"Invite error: {type(ex).__name__}")
-                return False
-        except Exception as ex:
-            await msg.edit_text(f"Invite error: {type(ex).__name__}")
-            return False
-
-        try:
-            await msg.delete()
-        except Exception:
-            pass
-
-        try:
-            await client.resolve_peer(chat_id)
-        except Exception:
-            pass
-
-    except Exception as ex:
-        await reply(f"Userbot check failed: {type(ex).__name__}: {ex}")
-        return False
-
-    return True
-
-
 async def _play_by_id(pid: str, chat_id: int, mention: str, reply, shuffle: bool = False):
-    if not await _ensure_ub(chat_id, reply):
+    if not await ensure_ub_in_chat(chat_id, reply):
         return
 
     pl = await db.pl_get_by_id(pid)
@@ -341,8 +262,7 @@ async def _cmd_export(m: types.Message, name: str):
             "playlist": pl["name"],
             "tracks": [{"title": t["title"], "url": t["url"], "duration": t["duration"]} for t in tracks],
         },
-        indent=2,
-        ensure_ascii=False,
+        indent=2, ensure_ascii=False,
     )
     fname = f"/tmp/pl_{pl['_id'][:8]}.json"
     with open(fname, "w", encoding="utf-8") as f:
@@ -381,8 +301,8 @@ async def cb_view(_, cq: types.CallbackQuery):
 
 @app.on_callback_query(filters.regex(r"^pl_play_(.+)$"))
 async def cb_play(_, cq: types.CallbackQuery):
+    await cq.answer()
     try:
-        await cq.answer()
         pid = cq.matches[0].group(1)
         if not await db.pl_get_by_id(pid):
             return await cq.message.reply_text("Playlist not found.")
@@ -393,8 +313,8 @@ async def cb_play(_, cq: types.CallbackQuery):
 
 @app.on_callback_query(filters.regex(r"^pl_shuffle_(.+)$"))
 async def cb_shuffle(_, cq: types.CallbackQuery):
+    await cq.answer()
     try:
-        await cq.answer()
         pid = cq.matches[0].group(1)
         if not await db.pl_get_by_id(pid):
             return await cq.message.reply_text("Playlist not found.")
