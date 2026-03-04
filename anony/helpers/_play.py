@@ -15,6 +15,14 @@ async def ensure_ub_in_chat(chat_id: int, reply) -> bool:
         return True
 
     client = await db.get_client(chat_id)
+    if client is None:
+        await reply("No userbot is configured for this chat.")
+        return False
+
+    if client.me is None:
+        await reply("Userbot is not ready. Try again in a moment.")
+        return False
+
     ub_id = client.me.id
 
     try:
@@ -72,6 +80,10 @@ async def ensure_ub_in_chat(chat_id: int, reply) -> bool:
             pass
         await client.resolve_peer(chat_id)
 
+    except Exception as ex:
+        await reply(f"Userbot check failed: {type(ex).__name__}: {ex}")
+        return False
+
     return True
 
 
@@ -112,6 +124,8 @@ def checkUB(play):
 
         if chat_id not in db.active_calls:
             client = await db.get_client(chat_id)
+            if client is None or client.me is None:
+                return await m.reply_text("Userbot not available. Contact support.")
             ub_id = client.me.id
             try:
                 member = await app.get_chat_member(chat_id, ub_id)
