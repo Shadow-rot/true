@@ -2,10 +2,11 @@
 # Licensed under the MIT License.
 # This file is part of AnonXMusic
 
+import asyncio
 import json
 import random
 
-from pyrogram import filters, types
+from pyrogram import enums, errors, filters, types
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from anony import anon, app, config, db, lang, queue, yt
@@ -54,7 +55,85 @@ def _confirm_buttons(pid: str) -> InlineKeyboardMarkup:
     ]])
 
 
+async def _ensure_ub(chat_id: int, reply) -> bool:
+    """
+    Ensures the userbot client is present in the chat.
+    Mirrors checkUB join/unban logic but works for any context.
+    Returns True if ready, False if a blocking error occurred (reply already sent).
+    """
+    if chat_id in db.active_calls:
+        return True
+
+    client = await db.get_client(chat_id)
+    if not client:
+        await reply("No assistant configured for this chat.")
+        return False
+
+    ub_id = client.me.id
+
+    try:
+        member = await app.get_chat_member(chat_id, ub_id)
+        if member.status in (enums.ChatMemberStatus.BANNED, enums.ChatMemberStatus.RESTRICTED):
+            try:
+                await app.unban_chat_member(chat_id=chat_id, user_id=ub_id)
+            except Exception:
+                await reply(f"Assistant is banned in this chat. Unban user ID: <code>{ub_id}</code>")
+                return False
+
+    except errors.ChatAdminRequired:
+        await reply("Bot needs admin rights to manage the assistant.")
+        return False
+
+    except (errors.UserNotParticipant, errors.exceptions.bad_request_400.UserNotParticipant):
+        if hasattr(client, "resolve_peer"):
+            try:
+                chat = await app.get_chat(chat_id)
+                invite_link = chat.username or chat.invite_link
+                if not invite_link:
+                    invite_link = await app.export_chat_invite_link(chat_id)
+            except errors.ChatAdminRequired:
+                await reply("Bot needs admin rights to invite the assistant.")
+                return False
+            except Exception as ex:
+                await reply(f"Could not get invite link: {type(ex).__name__}")
+                return False
+
+            msg = await reply("Inviting assistant to chat...")
+            await asyncio.sleep(2)
+            try:
+                await client.join_chat(invite_link)
+            except errors.UserAlreadyParticipant:
+                pass
+            except errors.InviteRequestSent:
+                await asyncio.sleep(2)
+                try:
+                    await app.approve_chat_join_request(chat_id, ub_id)
+                except errors.HideRequesterMissing:
+                    pass
+                except Exception as ex:
+                    await msg.edit_text(f"Invite error: {type(ex).__name__}")
+                    return False
+            except Exception as ex:
+                await msg.edit_text(f"Invite error: {type(ex).__name__}")
+                return False
+
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+
+            try:
+                await client.resolve_peer(chat_id)
+            except Exception:
+                pass
+
+    return True
+
+
 async def _play_by_id(pid: str, chat_id: int, mention: str, reply, shuffle: bool = False):
+    if not await _ensure_ub(chat_id, reply):
+        return
+
     pl = await db.pl_get_by_id(pid)
     if not pl:
         return await reply("Playlist not found.")
@@ -63,24 +142,31 @@ async def _play_by_id(pid: str, chat_id: int, mention: str, reply, shuffle: bool
         return await reply("Playlist is empty.")
     if shuffle:
         random.shuffle(tracks)
+
     sent = await reply("Loading playlist...")
     first_track = await yt.search(tracks[0]["url"], sent.id, video=False)
     if not first_track:
         return await sent.edit_text(f"Could not fetch track. Support: {config.SUPPORT_CHAT}")
+
     first_track.user = mention
     position = queue.add(chat_id, first_track)
+
     for t in tracks[1:]:
         tr = await yt.search(t["url"], video=False)
         if tr:
             tr.user = mention
             queue.add(chat_id, tr)
+
     label = "Playlist shuffled and queued" if shuffle else "Playlist queued"
     summary = f"{label}\n\n<b>{pl['name'].title()}</b>\nSongs: {len(tracks)}\nBy: {mention}\n\n{_blockquote(tracks)}"
+
     if position != 0 or await db.get_call(chat_id):
         return await sent.edit_text(summary)
+
     if not first_track.file_path:
         await sent.edit_text("Downloading...")
         first_track.file_path = await yt.download(first_track.id, video=False)
+
     await anon.play_media(chat_id=chat_id, message=sent, media=first_track)
     if len(tracks) > 1:
         await app.send_message(chat_id=chat_id, text=summary)
@@ -218,10 +304,10 @@ async def _cmd_import(m: types.Message, name: str, url: str):
     yt_tracks = await yt.playlist(config.PLAYLIST_LIMIT, m.from_user.mention, url, video=False)
     if not yt_tracks:
         return await sent.edit_text("Could not fetch YouTube playlist.")
-    added = sum(
-        1 for t in yt_tracks
-        if await db.pl_add_track(pl["_id"], t.title, t.duration_sec, t.url, t.id, m.from_user.id)
-    )
+    added = 0
+    for t in yt_tracks:
+        if await db.pl_add_track(pl["_id"], t.title, t.duration_sec, t.url, t.id, m.from_user.id):
+            added += 1
     await sent.edit_text(f"Imported {added} tracks into <b>{name.title()}</b>.")
 
 
