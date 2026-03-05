@@ -9,9 +9,9 @@ from typing import Optional, Dict, List
 from collections import defaultdict
 
 import pytz
-from kurigram import filters, enums
-from kurigram.enums import ButtonStyle
-from kurigram.types import (
+from pyrogram import filters, enums
+from pyrogram.enums import ButtonStyle
+from pyrogram.types import (
     ChatPermissions,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
@@ -19,7 +19,7 @@ from kurigram.types import (
     Message,
     User,
 )
-from kurigram.errors import (
+from pyrogram.errors import (
     ChatAdminRequired,
     UserAdminInvalid,
     RPCError,
