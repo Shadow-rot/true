@@ -1,4 +1,5 @@
-import logging
+import asyncio
+import yt_dlp
 from pyrogram import types, enums
 from py_yt import VideosSearch
 
@@ -6,6 +7,18 @@ from anony import app, logger
 from anony.core.youtube import YouTube
 
 yt = YouTube()
+
+
+def _extract_info(video_id: str) -> dict:
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "noplaylist": True,
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        return ydl.extract_info(url, download=False) or {}
 
 
 @app.on_inline_query()
@@ -40,7 +53,6 @@ async def inline_search(_, query: types.InlineQuery):
             thumb    = thumbs[-1].get("url", "").split("?")[0]
 
             if not vid_id or not thumb:
-                logger.warning(f"[INLINE] skipping result missing id or thumb: {v}")
                 continue
 
             answers.append(
@@ -53,7 +65,7 @@ async def inline_search(_, query: types.InlineQuery):
                     caption=(
                         f"<b>🎵 {title[:60]}</b>\n"
                         f"⏱ {duration}  •  {channel}\n\n"
-                        f"<i>Tap the button to download as MP3</i>"
+                        f"<i>Tap below to download as MP3</i>"
                     ),
                     parse_mode=enums.ParseMode.HTML,
                     reply_markup=types.InlineKeyboardMarkup([[
@@ -64,7 +76,6 @@ async def inline_search(_, query: types.InlineQuery):
 
         if answers:
             await app.answer_inline_query(query.id, results=answers, cache_time=5)
-            logger.info(f"[INLINE] answered with {len(answers)} results")
         else:
             await app.answer_inline_query(
                 query.id, results=[],
@@ -86,13 +97,13 @@ async def inline_search(_, query: types.InlineQuery):
             pass
 
 
-@app.on_callback_query(filters=None)
+@app.on_callback_query()
 async def inline_download(client, cb: types.CallbackQuery):
     if not cb.data or not cb.data.startswith("ildl:"):
         return
 
-    video_id    = cb.data.split(":", 1)[1]
-    inline_mid  = cb.inline_message_id
+    video_id   = cb.data.split(":", 1)[1]
+    inline_mid = cb.inline_message_id
 
     logger.info(f"[ILDL] video_id={video_id} inline_mid={inline_mid} user={cb.from_user.id}")
 
@@ -100,18 +111,30 @@ async def inline_download(client, cb: types.CallbackQuery):
         await cb.answer("❌ Cannot process this request.", show_alert=True)
         return
 
-    await cb.answer("⏳ Downloading, please wait…", show_alert=False)
+    await cb.answer("⏳ Downloading…", show_alert=False)
 
     try:
         await client.edit_inline_caption(
             inline_message_id=inline_mid,
-            caption="⏳ <b>Downloading MP3…</b>",
+            caption="⏳ <b>Fetching track info…</b>",
             parse_mode=enums.ParseMode.HTML,
         )
     except Exception as e:
-        logger.warning(f"[ILDL] could not edit caption to downloading: {e}")
+        logger.warning(f"[ILDL] caption edit failed: {e}")
 
     try:
+        info = await asyncio.to_thread(_extract_info, video_id)
+        title     = info.get("title", "Unknown Title")
+        performer = info.get("uploader") or info.get("channel") or "Unknown Artist"
+        duration  = info.get("duration", 0)
+        logger.info(f"[ILDL] info: title={title} performer={performer}")
+
+        await client.edit_inline_caption(
+            inline_message_id=inline_mid,
+            caption=f"⏳ <b>Downloading:</b> {title[:50]}…",
+            parse_mode=enums.ParseMode.HTML,
+        )
+
         file_path = await yt.download(video_id, video=False)
         logger.info(f"[ILDL] download result: {file_path}")
 
@@ -125,12 +148,17 @@ async def inline_download(client, cb: types.CallbackQuery):
 
         await client.edit_inline_media(
             inline_message_id=inline_mid,
-            media=types.InputMediaAudio(media=file_path),
+            media=types.InputMediaAudio(
+                media=file_path,
+                title=title,
+                performer=performer,
+                duration=duration,
+            ),
         )
-        logger.info(f"[ILDL] edit_inline_media success for {video_id}")
+        logger.info(f"[ILDL] done: {title}")
 
     except Exception as e:
-        logger.error(f"[ILDL] error: {e}", exc_info=True)
+        logger.error(f"[ILDL] fatal: {e}", exc_info=True)
         try:
             await client.edit_inline_caption(
                 inline_message_id=inline_mid,
