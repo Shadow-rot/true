@@ -6,27 +6,24 @@ from anony.core.youtube import YouTube
 
 yt = YouTube()
 _meta: dict[str, dict] = {}
+_fid: dict[str, str] = {}
 
 
 @app.on_inline_query()
 async def inline_search(_, query: types.InlineQuery):
     text = query.query.strip()
-    logger.info(f"[INLINE] query='{text}' from={query.from_user.id}")
-
     if not text:
         await app.answer_inline_query(
-            query.id,
-            results=[],
+            query.id, results=[],
             switch_pm_text="🎵 Type a song name to search",
             switch_pm_parameter="start",
             cache_time=0,
         )
         return
 
+    logger.info(f"[INLINE] query='{text}' from={query.from_user.id}")
     try:
-        search = VideosSearch(text, limit=10)
-        data = await search.next()
-        results = data.get("result", [])
+        results = (await (VideosSearch(text, limit=10)).next()).get("result", [])
         logger.info(f"[INLINE] got {len(results)} results")
 
         answers = []
@@ -36,13 +33,15 @@ async def inline_search(_, query: types.InlineQuery):
             duration = v.get("duration", "N/A")
             views    = v.get("viewCount", {}).get("short", "N/A")
             channel  = v.get("channel", {}).get("name", "Unknown")
-            thumbs   = v.get("thumbnails") or [{}]
-            thumb    = thumbs[-1].get("url", "").split("?")[0]
+            thumb    = (v.get("thumbnails") or [{}])[-1].get("url", "").split("?")[0]
 
             if not vid_id or not thumb:
                 continue
 
             _meta[vid_id] = {"title": title, "performer": channel, "duration": duration}
+
+            cached = vid_id in _fid or yt._check_cached_file(vid_id)
+            tag = "⚡ Instant" if cached else "⬇️ Download"
 
             answers.append(
                 types.InlineQueryResultPhoto(
@@ -50,21 +49,14 @@ async def inline_search(_, query: types.InlineQuery):
                     photo_url=thumb,
                     thumb_url=thumb,
                     title=title[:64],
-                    description=f"🎵 {duration}  •  👁 {views}  •  {channel}",
-                    caption=(
-                        f"<b>🎵 {title[:60]}</b>\n"
-                        f"⏱ {duration}  •  {channel}\n\n"
-                        f"<i>Tap below to download as MP3</i>"
-                    ),
+                    description=f"{tag}  •  🎵 {duration}  •  👁 {views}  •  {channel}",
+                    caption=f"⏳ <b>{title[:60]}</b>…",
                     parse_mode=enums.ParseMode.HTML,
-                    reply_markup=types.InlineKeyboardMarkup([[
-                        types.InlineKeyboardButton("⬇️ Download MP3", callback_data=f"ildl:{vid_id}")
-                    ]])
                 )
             )
 
         if answers:
-            await app.answer_inline_query(query.id, results=answers, cache_time=5)
+            await app.answer_inline_query(query.id, results=answers, cache_time=30)
         else:
             await app.answer_inline_query(
                 query.id, results=[],
@@ -72,13 +64,12 @@ async def inline_search(_, query: types.InlineQuery):
                 switch_pm_parameter="start",
                 cache_time=5,
             )
-
     except Exception as e:
-        logger.error(f"[INLINE] search error: {e}", exc_info=True)
+        logger.error(f"[INLINE] error: {e}", exc_info=True)
         try:
             await app.answer_inline_query(
                 query.id, results=[],
-                switch_pm_text="⚠️ Search failed, try again",
+                switch_pm_text="⚠️ Search failed",
                 switch_pm_parameter="start",
                 cache_time=0,
             )
@@ -86,35 +77,41 @@ async def inline_search(_, query: types.InlineQuery):
             pass
 
 
-@app.on_callback_query()
-async def inline_download(client, cb: types.CallbackQuery):
-    if not cb.data or not cb.data.startswith("ildl:"):
-        return
-
-    video_id   = cb.data.split(":", 1)[1]
-    inline_mid = cb.inline_message_id
-
-    logger.info(f"[ILDL] video_id={video_id} inline_mid={inline_mid} user={cb.from_user.id}")
-
+@app.on_chosen_inline_result()
+async def on_chosen(client, result: types.ChosenInlineResult):
+    video_id   = result.result_id
+    inline_mid = result.inline_message_id
     if not inline_mid:
-        await cb.answer("❌ Cannot process this request.", show_alert=True)
         return
-
-    await cb.answer("⏳ Downloading…", show_alert=False)
 
     meta      = _meta.get(video_id, {})
     title     = meta.get("title", "Unknown Title")
     performer = meta.get("performer", "Unknown Artist")
 
-    try:
-        await client.edit_inline_caption(
-            inline_message_id=inline_mid,
-            caption=f"⏳ <b>Downloading:</b> {title[:50]}…",
-            parse_mode=enums.ParseMode.HTML,
-        )
-    except Exception as e:
-        logger.warning(f"[ILDL] caption edit failed: {e}")
+    logger.info(f"[ILDL] start video_id={video_id} title={title}")
 
+    if video_id in _fid:
+        logger.info(f"[ILDL] file_id cache hit for {video_id}")
+        try:
+            await client.edit_inline_media(
+                inline_message_id=inline_mid,
+                media=types.InputMediaAudio(
+                    media=_fid[video_id],
+                    title=title,
+                    performer=performer,
+                ),
+            )
+            logger.info(f"[ILDL] instant send via file_id: {title}")
+        except Exception as e:
+            logger.warning(f"[ILDL] file_id send failed, re-uploading: {e}")
+            del _fid[video_id]
+            await _download_and_send(client, video_id, inline_mid, title, performer)
+        return
+
+    await _download_and_send(client, video_id, inline_mid, title, performer)
+
+
+async def _download_and_send(client, video_id: str, inline_mid: str, title: str, performer: str):
     try:
         url       = f"https://www.youtube.com/watch?v={video_id}"
         file_path = await yt.fallen.download_track(url)
@@ -122,17 +119,17 @@ async def inline_download(client, cb: types.CallbackQuery):
 
         if not file_path:
             file_path = await yt.download(video_id, video=False)
-            logger.info(f"[ILDL] ytdlp fallback result: {file_path}")
+            logger.info(f"[ILDL] ytdlp fallback: {file_path}")
 
         if not file_path:
             await client.edit_inline_caption(
                 inline_message_id=inline_mid,
-                caption="❌ <b>Download failed.</b> Try again.",
+                caption="❌ <b>Download failed.</b>",
                 parse_mode=enums.ParseMode.HTML,
             )
             return
 
-        await client.edit_inline_media(
+        msg = await client.edit_inline_media(
             inline_message_id=inline_mid,
             media=types.InputMediaAudio(
                 media=file_path,
@@ -140,6 +137,11 @@ async def inline_download(client, cb: types.CallbackQuery):
                 performer=performer,
             ),
         )
+
+        if msg and hasattr(msg, "audio") and msg.audio:
+            _fid[video_id] = msg.audio.file_id
+            logger.info(f"[ILDL] cached file_id for {video_id}")
+
         logger.info(f"[ILDL] done: {title}")
 
     except Exception as e:
