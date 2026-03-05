@@ -4,7 +4,7 @@ from pyrogram import Client, filters, enums
 from pyrogram import raw
 from pyrogram.errors import StickersetInvalid, BadRequest
 from pyrogram.types import Message
-from anony import app
+from anony import app, userbot
 
 
 async def _text_on_sticker(data: bytes, text: str) -> BytesIO:
@@ -53,9 +53,10 @@ async def _to_webp(data: bytes) -> BytesIO:
     return out
 
 
-async def _upload_sticker(client: Client, buf: BytesIO, mime: str, fname: str) -> raw.types.InputDocument:
-    uploaded = await client.save_file(buf)
-    r = await client.invoke(
+async def _upload_sticker(buf: BytesIO, mime: str, fname: str) -> raw.types.InputDocument:
+    buf.seek(0)
+    uploaded = await userbot.save_file(buf)
+    r = await userbot.invoke(
         raw.functions.messages.UploadMedia(
             peer=raw.types.InputPeerSelf(),
             media=raw.types.InputMediaUploadedDocument(
@@ -78,7 +79,7 @@ async def mmf_cmd(client: Client, ctx: Message):
     if not any([replied.sticker, replied.photo, replied.document]):
         return await ctx.reply_text("❌ Reply to a sticker or photo.", parse_mode=enums.ParseMode.HTML)
     if replied.sticker and (replied.sticker.is_animated or replied.sticker.is_video):
-        return await ctx.reply_text("❌ Only static stickers and images are supported.", parse_mode=enums.ParseMode.HTML)
+        return await ctx.reply_text("❌ Only static stickers and photos are supported.", parse_mode=enums.ParseMode.HTML)
     st = await ctx.reply_text("⏳", parse_mode=enums.ParseMode.HTML)
     try:
         f = await client.download_media(replied, in_memory=True)
@@ -100,7 +101,7 @@ async def kang_cmd(client: Client, ctx: Message):
         return await ctx.reply_text("❌ Reply to a sticker or media.", parse_mode=enums.ParseMode.HTML)
     st = await ctx.reply_text("⏳ Kanging…", parse_mode=enums.ParseMode.HTML)
     try:
-        me = await client.get_me()
+        me = await userbot.get_me()
         emoji = "🎭"
         is_animated = is_video = False
 
@@ -118,22 +119,19 @@ async def kang_cmd(client: Client, ctx: Message):
 
         if is_animated:
             buf = BytesIO(data)
-            buf.seek(0)
             mime, fname = "application/x-tgsticker", "sticker.tgs"
         elif is_video:
             buf = BytesIO(data)
-            buf.seek(0)
             mime, fname = "video/webm", "sticker.webm"
         else:
             buf = await _to_webp(data)
             mime, fname = "image/webp", "sticker.webp"
 
-        buf.name = fname
-        doc = await _upload_sticker(client, buf, mime, fname)
+        doc = await _upload_sticker(buf, mime, fname)
         item = raw.types.InputStickerSetItem(document=doc, emoji=emoji)
 
         try:
-            await client.invoke(
+            await userbot.invoke(
                 raw.functions.stickers.AddStickerToSet(
                     stickerset=raw.types.InputStickerSetShortName(short_name=pack_name),
                     sticker=item,
@@ -141,7 +139,7 @@ async def kang_cmd(client: Client, ctx: Message):
             )
             action = "Added to"
         except (StickersetInvalid, BadRequest):
-            await client.invoke(
+            await userbot.invoke(
                 raw.functions.stickers.CreateStickerSet(
                     user_id=raw.types.InputUserSelf(),
                     title=pack_title,
