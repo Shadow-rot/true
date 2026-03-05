@@ -1,58 +1,67 @@
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
-from pyrogram import Client, filters, enums, raw
+from pyrogram import Client, filters, enums
+from pyrogram import raw
+from pyrogram.errors import StickersetInvalid, BadRequest
 from pyrogram.types import Message
 from anony import app
 
 
-async def _text_on_image(data: bytes, text: str) -> bytes:
+async def _text_on_sticker(data: bytes, text: str) -> BytesIO:
     img = Image.open(BytesIO(data)).convert("RGBA")
     w, h = img.size
     draw = ImageDraw.Draw(img)
-    fs = max(24, w // 8)
+    fs = max(28, w // 7)
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", fs)
     except Exception:
         font = ImageFont.load_default()
-    lines, line = [], ""
+    lines, cur = [], ""
     for word in text.split():
-        test = f"{line} {word}".strip()
-        if draw.textlength(test, font=font) > w * 0.85 and line:
-            lines.append(line)
-            line = word
+        test = f"{cur} {word}".strip()
+        bb = draw.textbbox((0, 0), test, font=font)
+        if (bb[2] - bb[0]) > w * 0.88 and cur:
+            lines.append(cur)
+            cur = word
         else:
-            line = test
-    if line:
-        lines.append(line)
+            cur = test
+    if cur:
+        lines.append(cur)
     full = "\n".join(lines)
     bb = draw.textbbox((0, 0), full, font=font)
-    tx = (w - (bb[2] - bb[0])) / 2
-    ty = h - (bb[3] - bb[1]) - 15
-    for ox, oy in ((-2, -2), (2, -2), (-2, 2), (2, 2)):
-        draw.text((tx + ox, ty + oy), full, font=font, fill=(0, 0, 0, 255), align="center")
-    draw.text((tx, ty), full, font=font, fill=(255, 255, 255, 255), align="center")
+    tw, th = bb[2] - bb[0], bb[3] - bb[1]
+    tx = (w - tw) / 2
+    ty = h - th - 20
+    for ox, oy in ((-2, -2), (2, -2), (-2, 2), (2, 2), (0, -2), (0, 2), (-2, 0), (2, 0)):
+        draw.multiline_text((tx + ox, ty + oy), full, font=font, fill=(0, 0, 0, 255), align="center")
+    draw.multiline_text((tx, ty), full, font=font, fill=(255, 255, 255, 255), align="center")
     out = BytesIO()
     img.save(out, "WEBP")
-    return out.getvalue()
+    out.seek(0)
+    out.name = "sticker.webp"
+    return out
 
 
 async def _to_webp(data: bytes) -> BytesIO:
     img = Image.open(BytesIO(data)).convert("RGBA")
     img.thumbnail((512, 512), Image.LANCZOS)
-    buf = BytesIO()
-    img.save(buf, "WEBP")
-    buf.seek(0)
-    buf.name = "s.webp"
-    return buf
+    canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+    offset = ((512 - img.width) // 2, (512 - img.height) // 2)
+    canvas.paste(img, offset)
+    out = BytesIO()
+    canvas.save(out, "WEBP")
+    out.seek(0)
+    out.name = "sticker.webp"
+    return out
 
 
-async def _upload_doc(client: Client, buf: BytesIO, mime: str, fname: str) -> raw.types.InputDocument:
-    saved = await client.save_file(buf)
+async def _upload_sticker(client: Client, buf: BytesIO, mime: str, fname: str) -> raw.types.InputDocument:
+    uploaded = await client.save_file(buf)
     r = await client.invoke(
         raw.functions.messages.UploadMedia(
             peer=raw.types.InputPeerSelf(),
             media=raw.types.InputMediaUploadedDocument(
-                file=saved,
+                file=uploaded,
                 mime_type=mime,
                 attributes=[raw.types.DocumentAttributeFilename(file_name=fname)],
             ),
@@ -66,16 +75,14 @@ async def _upload_doc(client: Client, buf: BytesIO, mime: str, fname: str) -> ra
 async def mmf_cmd(client: Client, ctx: Message):
     text = " ".join(ctx.text.split()[1:])
     if not text:
-        return await ctx.reply_text("Usage: <code>/mmf your text</code>", parse_mode=enums.ParseMode.HTML)
+        return await ctx.reply_text("❌ Usage: <code>/mmf your text</code>", parse_mode=enums.ParseMode.HTML)
     replied = ctx.reply_to_message
     if not any([replied.sticker, replied.photo, replied.document]):
-        return await ctx.reply_text("❌ Reply to a sticker or image.", parse_mode=enums.ParseMode.HTML)
+        return await ctx.reply_text("❌ Reply to a sticker or photo.", parse_mode=enums.ParseMode.HTML)
     st = await ctx.reply_text("⏳", parse_mode=enums.ParseMode.HTML)
     try:
         f = await client.download_media(replied, in_memory=True)
-        result = await _text_on_image(bytes(f.getbuffer()), text)
-        buf = BytesIO(result)
-        buf.name = "sticker.webp"
+        buf = await _text_on_sticker(f.getvalue(), text)
         await ctx.reply_sticker(buf)
     except Exception as e:
         await ctx.reply_text(f"⚠️ <code>{e}</code>", parse_mode=enums.ParseMode.HTML)
@@ -98,31 +105,33 @@ async def kang_cmd(client: Client, ctx: Message):
         is_animated = is_video = False
 
         if replied.sticker:
-            s = replied.sticker
-            emoji = s.emoji or "🎭"
-            is_animated = s.is_animated
-            is_video = s.is_video
+            emoji = replied.sticker.emoji or "🎭"
+            is_animated = replied.sticker.is_animated
+            is_video = replied.sticker.is_video
 
-        pack_suffix = "a" if is_animated else ("v" if is_video else "s")
-        pack_name = f"kang{me.id}{pack_suffix}"
-        pack_title = f"{me.first_name}'s Kang Pack"
+        pack_type = "a" if is_animated else ("v" if is_video else "s")
+        pack_name = f"kang{me.id}{pack_type}"
+        pack_title = f"{me.first_name[:32]}'s Pack"
 
         f = await client.download_media(replied, in_memory=True)
-        data = bytes(f.getbuffer())
+        data = f.getvalue()
 
         if is_animated:
             buf = BytesIO(data)
+            buf.seek(0)
             buf.name = "sticker.tgs"
             mime, fname = "application/x-tgsticker", "sticker.tgs"
         elif is_video:
             buf = BytesIO(data)
+            buf.seek(0)
             buf.name = "sticker.webm"
             mime, fname = "video/webm", "sticker.webm"
         else:
             buf = await _to_webp(data)
             mime, fname = "image/webp", "sticker.webp"
 
-        doc = await _upload_doc(client, buf, mime, fname)
+        doc = await _upload_sticker(client, buf, mime, fname)
+        user_peer = await client.resolve_peer(me.id)
         item = raw.types.InputStickerSetItem(document=doc, emoji=emoji)
 
         try:
@@ -132,23 +141,20 @@ async def kang_cmd(client: Client, ctx: Message):
                     sticker=item,
                 )
             )
-            action = "Added to"
-        except raw.errors.StickersetInvalid:
-            kwargs = dict(
-                user_id=raw.types.InputUserSelf(),
-                title=pack_title,
-                short_name=pack_name,
-                stickers=[item],
+            msg = "Added to"
+        except (StickersetInvalid, BadRequest):
+            await client.invoke(
+                raw.functions.stickers.CreateStickerSet(
+                    user_id=user_peer,
+                    title=pack_title,
+                    short_name=pack_name,
+                    stickers=[item],
+                )
             )
-            if is_animated:
-                kwargs["animated"] = True
-            elif is_video:
-                kwargs["videos"] = True
-            await client.invoke(raw.functions.stickers.CreateStickerSet(**kwargs))
-            action = "Created"
+            msg = "Created"
 
         await ctx.reply_text(
-            f"✅ {action}: <a href='https://t.me/addstickers/{pack_name}'>Open Pack</a>",
+            f"✅ {msg}: <a href='https://t.me/addstickers/{pack_name}'>Open Pack</a>",
             parse_mode=enums.ParseMode.HTML,
             disable_web_page_preview=True,
         )
