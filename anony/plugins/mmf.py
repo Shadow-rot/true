@@ -85,6 +85,7 @@ async def mmf_cmd(client: Client, ctx: Message):
         buf = await _text_on_sticker(f.getvalue(), text)
         await ctx.reply_sticker(buf)
     except Exception as e:
+        print(e)
         await ctx.reply_text(f"⚠️ <code>{e}</code>", parse_mode=enums.ParseMode.HTML)
     finally:
         try:
@@ -160,6 +161,7 @@ async def kang_cmd(client: Client, ctx: Message):
             disable_web_page_preview=True,
         )
     except Exception as e:
+        print(e)
         await ctx.reply_text(f"⚠️ <code>{e}</code>", parse_mode=enums.ParseMode.HTML)
     finally:
         try:
