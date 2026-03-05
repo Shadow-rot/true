@@ -33,26 +33,32 @@ def _blockquote(tracks: list[dict]) -> str:
 def _list_buttons(playlists: list[dict]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton(f"play  {pl['name'].title()}", callback_data=f"pl_play_{pl['_id']}"),
+            InlineKeyboardButton(f"▶ {pl['name'].title()}", callback_data=f"pl_play_{pl['_id']}"),
             InlineKeyboardButton("view", callback_data=f"pl_view_{pl['_id']}"),
-            InlineKeyboardButton("delete", callback_data=f"pl_del_{pl['_id']}"),
+            InlineKeyboardButton("✕", callback_data=f"pl_del_{pl['_id']}"),
         ]
         for pl in playlists
     ])
 
 
 def _view_buttons(pid: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("play", callback_data=f"pl_play_{pid}"),
-        InlineKeyboardButton("shuffle", callback_data=f"pl_shuffle_{pid}"),
-        InlineKeyboardButton("delete", callback_data=f"pl_del_{pid}"),
-    ]])
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("▶ play", callback_data=f"pl_play_{pid}"),
+            InlineKeyboardButton("⇄ shuffle", callback_data=f"pl_shuffle_{pid}"),
+        ],
+        [
+            InlineKeyboardButton("export", callback_data=f"pl_export_{pid}"),
+            InlineKeyboardButton("share", callback_data=f"pl_share_{pid}"),
+            InlineKeyboardButton("✕ delete", callback_data=f"pl_del_{pid}"),
+        ],
+    ])
 
 
 def _confirm_buttons(pid: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("confirm delete", callback_data=f"pl_delconfirm_{pid}"),
-        InlineKeyboardButton("cancel", callback_data=f"pl_delcancel_{pid}"),
+        InlineKeyboardButton("✓ confirm", callback_data=f"pl_delconfirm_{pid}"),
+        InlineKeyboardButton("✕ cancel", callback_data=f"pl_delcancel_{pid}"),
     ]])
 
 
@@ -91,10 +97,10 @@ async def _play_by_id(pid: str, chat_id: int, mention: str, reply, shuffle: bool
             tr.user = mention
             queue.add(chat_id, tr)
 
-    label = "Playlist shuffled and queued" if shuffle else "Playlist queued"
+    label = "Shuffled & queued" if shuffle else "Playlist queued"
     summary = (
         f"{label}\n\n<b>{pl['name'].title()}</b>\n"
-        f"Songs: {len(tracks)}\nBy: {mention}\n\n{_blockquote(tracks)}"
+        f"Songs: {len(tracks)} · By: {mention}\n\n{_blockquote(tracks)}"
     )
 
     if position != 0 or await db.get_call(chat_id):
@@ -110,82 +116,67 @@ async def _play_by_id(pid: str, chat_id: int, mention: str, reply, shuffle: bool
         await app.send_message(chat_id=chat_id, text=summary)
 
 
-@app.on_message(filters.command("playlist") & ~app.bl_users)
+# /pl — list playlists or view one, /pl new <name> — create
+@app.on_message(filters.command("pl") & ~app.bl_users)
 @lang.language()
-async def playlist_hndlr(_, m: types.Message) -> None:
+async def pl_handler(_, m: types.Message):
     args = m.command[1:]
+
     if not args:
-        return await _cmd_list(m)
-    sub = args[0].lower()
-    try:
-        if sub == "create" and len(args) >= 2:
-            await _cmd_create(m, args[1])
-        elif sub == "add" and len(args) >= 3:
-            await _cmd_add(m, args[1], " ".join(args[2:]))
-        elif sub == "remove" and len(args) == 3:
-            await _cmd_remove(m, args[1], int(args[2]))
-        elif sub == "delete" and len(args) == 2:
-            await _cmd_delete(m, args[1])
-        elif sub == "view" and len(args) == 2:
-            await _cmd_view(m, args[1])
-        elif sub == "play" and len(args) == 2:
-            await _cmd_play(m, args[1])
-        elif sub == "shuffle" and len(args) == 2:
-            await _cmd_play(m, args[1], shuffle=True)
-        elif sub == "import" and len(args) >= 3:
-            await _cmd_import(m, args[1], args[2])
-        elif sub == "export" and len(args) == 2:
-            await _cmd_export(m, args[1])
-        elif sub == "share" and len(args) == 2:
-            await _cmd_share(m, args[1])
-        else:
-            await m.reply_text(
-                "<b>Playlist Commands</b>\n\n"
-                "/playlist\n"
-                "/playlist create &lt;name&gt;\n"
-                "/playlist add &lt;name&gt; &lt;song/url&gt;\n"
-                "/playlist remove &lt;name&gt; &lt;pos&gt;\n"
-                "/playlist delete &lt;name&gt;\n"
-                "/playlist view &lt;name&gt;\n"
-                "/playlist play &lt;name&gt;\n"
-                "/playlist shuffle &lt;name&gt;\n"
-                "/playlist import &lt;name&gt; &lt;yt_url&gt;\n"
-                "/playlist export &lt;name&gt;\n"
-                "/playlist share &lt;name&gt;"
+        playlists = await db.pl_list(m.from_user.id)
+        if not playlists:
+            return await m.reply_text(
+                "No playlists yet.\n\n"
+                "<b>Create one:</b> <code>/pl new &lt;name&gt;</code>"
             )
-    except ValueError:
-        await m.reply_text("Invalid position. Must be a number.")
-    except Exception as e:
-        await m.reply_text(f"Error: {e}")
-
-
-async def _cmd_list(m: types.Message):
-    playlists = await db.pl_list(m.from_user.id)
-    if not playlists:
-        return await m.reply_text("No playlists. Use /playlist create &lt;name&gt;")
-    lines = []
-    for i, pl in enumerate(playlists, 1):
-        count = await db.pl_track_count(pl["_id"])
-        lines.append(f"<b>{i}.</b> {pl['name'].title()} ({count} songs)")
-    await m.reply_text(
-        "<b>Your Playlists</b>\n\n" + "\n".join(lines),
-        reply_markup=_list_buttons(playlists),
-    )
-
-
-async def _cmd_create(m: types.Message, name: str):
-    pl = await db.pl_create(m.from_user.id, name)
-    if pl is None:
-        existing = await db.pl_get(m.from_user.id, name)
+        lines = []
+        for i, pl in enumerate(playlists, 1):
+            count = await db.pl_track_count(pl["_id"])
+            lines.append(f"<b>{i}.</b> {pl['name'].title()} — {count} songs")
         return await m.reply_text(
-            f"Playlist <b>{name.title()}</b> already exists."
-            if existing else
-            f"Max {MAX_PLAYLISTS} playlists per user."
+            "<b>Your Playlists</b>\n\n" + "\n".join(lines),
+            reply_markup=_list_buttons(playlists),
         )
-    await m.reply_text(f"Playlist <b>{name.title()}</b> created.")
+
+    if args[0].lower() == "new" and len(args) >= 2:
+        name = args[1]
+        pl = await db.pl_create(m.from_user.id, name)
+        if pl is None:
+            existing = await db.pl_get(m.from_user.id, name)
+            return await m.reply_text(
+                f"Playlist <b>{name.title()}</b> already exists."
+                if existing else
+                f"Max {MAX_PLAYLISTS} playlists per user."
+            )
+        return await m.reply_text(
+            f"Playlist <b>{name.title()}</b> created.\n\n"
+            f"Add songs: <code>/add {name} &lt;song&gt;</code>"
+        )
+
+    name = args[0]
+    pl = await db.pl_get(m.from_user.id, name)
+    if not pl:
+        return await m.reply_text(
+            f"Playlist <b>{name.title()}</b> not found.\n\n"
+            f"Create it: <code>/pl new {name}</code>"
+        )
+    tracks = await db.pl_get_tracks(pl["_id"])
+    header = (
+        f"<b>{pl['name'].title()}</b>\n"
+        f"Owner: {m.from_user.mention} · Tracks: {len(tracks)}\n\n"
+    )
+    body = _blockquote(tracks) if tracks else "<i>No tracks yet. Use /add to add songs.</i>"
+    await m.reply_text(header + body, reply_markup=_view_buttons(pl["_id"]))
 
 
-async def _cmd_add(m: types.Message, name: str, query: str):
+# /add <name> <song or url>
+@app.on_message(filters.command("add") & ~app.bl_users)
+@lang.language()
+async def add_handler(_, m: types.Message):
+    args = m.command[1:]
+    if len(args) < 2:
+        return await m.reply_text("Usage: <code>/add &lt;playlist&gt; &lt;song/url&gt;</code>")
+    name, query = args[0], " ".join(args[1:])
     pl = await db.pl_get(m.from_user.id, name)
     if not pl:
         return await m.reply_text(f"Playlist <b>{name.title()}</b> not found.")
@@ -198,10 +189,23 @@ async def _cmd_add(m: types.Message, name: str, query: str):
     result = await db.pl_add_track(pl["_id"], track.title, track.duration_sec, track.url, track.id, m.from_user.id)
     if result is None:
         return await sent.edit_text(f"Playlist full. Max {MAX_TRACKS} tracks.")
-    await sent.edit_text(f"Added to <b>{name.title()}</b>: {track.title} - {_fmt(track.duration_sec)}")
+    await sent.edit_text(
+        f"Added to <b>{name.title()}</b>\n{track.title} — {_fmt(track.duration_sec)}"
+    )
 
 
-async def _cmd_remove(m: types.Message, name: str, pos: int):
+# /rm <name> <position>
+@app.on_message(filters.command("rm") & ~app.bl_users)
+@lang.language()
+async def rm_handler(_, m: types.Message):
+    args = m.command[1:]
+    if len(args) != 2:
+        return await m.reply_text("Usage: <code>/rm &lt;playlist&gt; &lt;position&gt;</code>")
+    name = args[0]
+    try:
+        pos = int(args[1])
+    except ValueError:
+        return await m.reply_text("Position must be a number.")
     pl = await db.pl_get(m.from_user.id, name)
     if not pl:
         return await m.reply_text(f"Playlist <b>{name.title()}</b> not found.")
@@ -210,84 +214,35 @@ async def _cmd_remove(m: types.Message, name: str, pos: int):
     await m.reply_text(f"Track #{pos} removed from <b>{name.title()}</b>.")
 
 
-async def _cmd_delete(m: types.Message, name: str):
+# /pplay <name>
+@app.on_message(filters.command("pplay") & ~app.bl_users)
+@lang.language()
+async def pplay_handler(_, m: types.Message):
+    args = m.command[1:]
+    if not args:
+        return await m.reply_text("Usage: <code>/pplay &lt;playlist&gt;</code>")
+    name = args[0]
     pl = await db.pl_get(m.from_user.id, name)
     if not pl:
         return await m.reply_text(f"Playlist <b>{name.title()}</b> not found.")
-    await m.reply_text(
-        f"Delete playlist <b>{name.title()}</b>? This cannot be undone.",
-        reply_markup=_confirm_buttons(pl["_id"]),
-    )
+    await _play_by_id(pl["_id"], m.chat.id, m.from_user.mention, m.reply_text)
 
 
-async def _cmd_view(m: types.Message, name: str):
+# /pshuffle <name>
+@app.on_message(filters.command("pshuffle") & ~app.bl_users)
+@lang.language()
+async def pshuffle_handler(_, m: types.Message):
+    args = m.command[1:]
+    if not args:
+        return await m.reply_text("Usage: <code>/pshuffle &lt;playlist&gt;</code>")
+    name = args[0]
     pl = await db.pl_get(m.from_user.id, name)
     if not pl:
         return await m.reply_text(f"Playlist <b>{name.title()}</b> not found.")
-    tracks = await db.pl_get_tracks(pl["_id"])
-    header = (
-        f"<b>Playlist: {pl['name'].title()}</b>\n"
-        f"Owner: {m.from_user.mention}\n"
-        f"Tracks: {len(tracks)}\n\n"
-    )
-    body = _blockquote(tracks) if tracks else "<i>No tracks yet.</i>"
-    await m.reply_text(header + body, reply_markup=_view_buttons(pl["_id"]))
+    await _play_by_id(pl["_id"], m.chat.id, m.from_user.mention, m.reply_text, shuffle=True)
 
 
-async def _cmd_play(m: types.Message, name: str, shuffle: bool = False):
-    pl = await db.pl_get(m.from_user.id, name)
-    if not pl:
-        return await m.reply_text(f"Playlist <b>{name.title()}</b> not found.")
-    await _play_by_id(pl["_id"], m.chat.id, m.from_user.mention, m.reply_text, shuffle)
-
-
-async def _cmd_import(m: types.Message, name: str, url: str):
-    if "playlist" not in url:
-        return await m.reply_text("Provide a valid YouTube playlist URL.")
-    pl = await db.pl_get(m.from_user.id, name) or await db.pl_create(m.from_user.id, name)
-    if not pl:
-        return await m.reply_text(f"Max {MAX_PLAYLISTS} playlists per user.")
-    sent = await m.reply_text("Fetching YouTube playlist...")
-    yt_tracks = await yt.playlist(config.PLAYLIST_LIMIT, m.from_user.mention, url, video=False)
-    if not yt_tracks:
-        return await sent.edit_text("Could not fetch YouTube playlist.")
-    added = 0
-    for t in yt_tracks:
-        if await db.pl_add_track(pl["_id"], t.title, t.duration_sec, t.url, t.id, m.from_user.id):
-            added += 1
-    await sent.edit_text(f"Imported {added} tracks into <b>{name.title()}</b>.")
-
-
-async def _cmd_export(m: types.Message, name: str):
-    pl = await db.pl_get(m.from_user.id, name)
-    if not pl:
-        return await m.reply_text(f"Playlist <b>{name.title()}</b> not found.")
-    tracks = await db.pl_get_tracks(pl["_id"])
-    data = json.dumps(
-        {
-            "playlist": pl["name"],
-            "tracks": [{"title": t["title"], "url": t["url"], "duration": t["duration"]} for t in tracks],
-        },
-        indent=2, ensure_ascii=False,
-    )
-    fname = f"/tmp/pl_{pl['_id'][:8]}.json"
-    with open(fname, "w", encoding="utf-8") as f:
-        f.write(data)
-    await m.reply_document(fname, caption=f"Export: <b>{name.title()}</b> - {len(tracks)} tracks")
-
-
-async def _cmd_share(m: types.Message, name: str):
-    pl = await db.pl_get(m.from_user.id, name)
-    if not pl:
-        return await m.reply_text(f"Playlist <b>{name.title()}</b> not found.")
-    me = await app.get_me()
-    link = f"https://t.me/{me.username}?start=pl_{pl['_id']}"
-    await m.reply_text(
-        f"<b>Share: {pl['name'].title()}</b>\n"
-        f"Tracks: {await db.pl_track_count(pl['_id'])}\n\n"
-        f"<code>{link}</code>"
-    )
-
+# ── Callback handlers ──────────────────────────────────────────────────────────
 
 @app.on_callback_query(filters.regex(r"^pl_view_"))
 async def cb_view(_, cq: types.CallbackQuery):
@@ -299,7 +254,10 @@ async def cb_view(_, cq: types.CallbackQuery):
         if not pl:
             return await cq.answer("Playlist not found.", show_alert=True)
         tracks = await db.pl_get_tracks(pid)
-        header = f"<b>Playlist: {pl['name'].title()}</b>\nTracks: {len(tracks)}\n\n"
+        header = (
+            f"<b>{pl['name'].title()}</b>\n"
+            f"Tracks: {len(tracks)}\n\n"
+        )
         body = _blockquote(tracks) if tracks else "<i>No tracks yet.</i>"
         await cq.edit_message_text(header + body, reply_markup=_view_buttons(pid))
         await cq.answer()
@@ -335,7 +293,54 @@ async def cb_shuffle(_, cq: types.CallbackQuery):
         await cq.message.reply_text(f"Error: {e}")
 
 
-@app.on_callback_query(filters.regex(r"^pl_del_"))
+@app.on_callback_query(filters.regex(r"^pl_export_"))
+async def cb_export(_, cq: types.CallbackQuery):
+    await cq.answer("Exporting...")
+    try:
+        pid = _pid(cq)
+        pl = await db.pl_get_by_id(pid)
+        if not pl:
+            return await cq.message.reply_text("Playlist not found.")
+        tracks = await db.pl_get_tracks(pid)
+        data = json.dumps(
+            {
+                "playlist": pl["name"],
+                "tracks": [{"title": t["title"], "url": t["url"], "duration": t["duration"]} for t in tracks],
+            },
+            indent=2, ensure_ascii=False,
+        )
+        fname = f"/tmp/pl_{pid[:8]}.json"
+        with open(fname, "w", encoding="utf-8") as f:
+            f.write(data)
+        await cq.message.reply_document(
+            fname,
+            caption=f"Export: <b>{pl['name'].title()}</b> — {len(tracks)} tracks",
+        )
+    except Exception as e:
+        await cq.message.reply_text(f"Error: {e}")
+
+
+@app.on_callback_query(filters.regex(r"^pl_share_"))
+async def cb_share(_, cq: types.CallbackQuery):
+    try:
+        pid = _pid(cq)
+        pl = await db.pl_get_by_id(pid)
+        if not pl:
+            return await cq.answer("Playlist not found.", show_alert=True)
+        me = await app.get_me()
+        link = f"https://t.me/{me.username}?start=pl_{pid}"
+        count = await db.pl_track_count(pid)
+        await cq.answer()
+        await cq.message.reply_text(
+            f"<b>Share: {pl['name'].title()}</b>\n"
+            f"Tracks: {count}\n\n"
+            f"<code>{link}</code>"
+        )
+    except Exception as e:
+        await cq.answer(f"Error: {e}", show_alert=True)
+
+
+@app.on_callback_query(filters.regex(r"^pl_del_(?!confirm|cancel)"))
 async def cb_del_prompt(_, cq: types.CallbackQuery):
     try:
         pid = _pid(cq)
@@ -347,7 +352,7 @@ async def cb_del_prompt(_, cq: types.CallbackQuery):
         if pl["user_id"] != cq.from_user.id:
             return await cq.answer("Only the owner can delete this.", show_alert=True)
         await cq.edit_message_text(
-            f"Delete <b>{pl['name'].title()}</b>? Cannot be undone.",
+            f"Delete <b>{pl['name'].title()}</b>? This cannot be undone.",
             reply_markup=_confirm_buttons(pid),
         )
         await cq.answer()
@@ -383,7 +388,7 @@ async def cb_del_cancel(_, cq: types.CallbackQuery):
         if not pl:
             return await cq.answer()
         tracks = await db.pl_get_tracks(pid)
-        header = f"<b>Playlist: {pl['name'].title()}</b>\nTracks: {len(tracks)}\n\n"
+        header = f"<b>{pl['name'].title()}</b>\nTracks: {len(tracks)}\n\n"
         body = _blockquote(tracks) if tracks else "<i>No tracks yet.</i>"
         await cq.edit_message_text(header + body, reply_markup=_view_buttons(pid))
         await cq.answer("Cancelled.")
