@@ -1,5 +1,3 @@
-import asyncio
-import yt_dlp
 from pyrogram import types, enums
 from py_yt import VideosSearch
 
@@ -7,18 +5,7 @@ from anony import app, logger
 from anony.core.youtube import YouTube
 
 yt = YouTube()
-
-
-def _extract_info(video_id: str) -> dict:
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "noplaylist": True,
-    }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        return ydl.extract_info(url, download=False) or {}
+_meta: dict[str, dict] = {}
 
 
 @app.on_inline_query()
@@ -54,6 +41,8 @@ async def inline_search(_, query: types.InlineQuery):
 
             if not vid_id or not thumb:
                 continue
+
+            _meta[vid_id] = {"title": title, "performer": channel, "duration": duration}
 
             answers.append(
                 types.InlineQueryResultPhoto(
@@ -113,30 +102,27 @@ async def inline_download(client, cb: types.CallbackQuery):
 
     await cb.answer("⏳ Downloading…", show_alert=False)
 
+    meta      = _meta.get(video_id, {})
+    title     = meta.get("title", "Unknown Title")
+    performer = meta.get("performer", "Unknown Artist")
+
     try:
         await client.edit_inline_caption(
             inline_message_id=inline_mid,
-            caption="⏳ <b>Fetching track info…</b>",
+            caption=f"⏳ <b>Downloading:</b> {title[:50]}…",
             parse_mode=enums.ParseMode.HTML,
         )
     except Exception as e:
         logger.warning(f"[ILDL] caption edit failed: {e}")
 
     try:
-        info = await asyncio.to_thread(_extract_info, video_id)
-        title     = info.get("title", "Unknown Title")
-        performer = info.get("uploader") or info.get("channel") or "Unknown Artist"
-        duration  = info.get("duration", 0)
-        logger.info(f"[ILDL] info: title={title} performer={performer}")
+        url       = f"https://www.youtube.com/watch?v={video_id}"
+        file_path = await yt.fallen.download_track(url)
+        logger.info(f"[ILDL] fallen result: {file_path}")
 
-        await client.edit_inline_caption(
-            inline_message_id=inline_mid,
-            caption=f"⏳ <b>Downloading:</b> {title[:50]}…",
-            parse_mode=enums.ParseMode.HTML,
-        )
-
-        file_path = await yt.download(video_id, video=False)
-        logger.info(f"[ILDL] download result: {file_path}")
+        if not file_path:
+            file_path = await yt.download(video_id, video=False)
+            logger.info(f"[ILDL] ytdlp fallback result: {file_path}")
 
         if not file_path:
             await client.edit_inline_caption(
@@ -152,7 +138,6 @@ async def inline_download(client, cb: types.CallbackQuery):
                 media=file_path,
                 title=title,
                 performer=performer,
-                duration=duration,
             ),
         )
         logger.info(f"[ILDL] done: {title}")
