@@ -257,6 +257,21 @@ async def _resolve_user(message: Message, allow_duration: bool = False) -> Optio
                 reason = " ".join(args[1:]).strip() or None
         return Target(user, reason, duration)
 
+    if message.entities:
+        for entity in message.entities:
+            if entity.type == enums.MessageEntityType.TEXT_MENTION and entity.user:
+                user = entity.user
+                reason, duration = None, None
+                if allow_duration and len(args) > 2:
+                    duration = DurationParser.parse(args[2])
+                    if duration:
+                        reason = args[3] if len(args) > 3 else None
+                    else:
+                        reason = " ".join(args[2:]) or None
+                elif len(args) > 2:
+                    reason = " ".join(args[2:]) or None
+                return Target(user, reason, duration)
+
     if len(args) < 2:
         await message.reply_text(
             "<blockquote><b>NO USER SPECIFIED</b></blockquote>\n\n"
