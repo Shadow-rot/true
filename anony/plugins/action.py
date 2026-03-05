@@ -699,7 +699,7 @@ _HELP_MENU = InlineKeyboardMarkup([
         InlineKeyboardButton("Overview",   callback_data="mh_overview", style=ButtonStyle.PRIMARY),
     ],
     [
-        InlineKeyboardButton("✕ Close",    callback_data="mh_close",    style=ButtonStyle.DNAGER),
+        InlineKeyboardButton("✕ Close",    callback_data="mh_close",    style=ButtonStyle.DANGER),
     ],
 ])
 
