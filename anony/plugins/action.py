@@ -30,7 +30,7 @@ from pyrogram.errors import (
 )
 
 from anony import app, config
-from config import OWNER_ID
+OWNER_ID = 5147822244
 
 KOLKATA_TZ = pytz.timezone("Asia/Kolkata")
 
