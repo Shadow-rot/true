@@ -90,8 +90,7 @@ async def mmf_cmd(client: Client, ctx: Message):
     finally:
         try:
             await st.delete()
-        except Exception as e:
-           print(e)
+        except Exception:
             pass
 
 
@@ -166,6 +165,5 @@ async def kang_cmd(client: Client, ctx: Message):
     finally:
         try:
             await st.delete()
-        except Exception as e:
-           print(e)
+        except Exception:
             pass
