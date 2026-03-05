@@ -29,9 +29,8 @@ async def _text_on_sticker(data: bytes, text: str) -> BytesIO:
         lines.append(cur)
     full = "\n".join(lines)
     bb = draw.textbbox((0, 0), full, font=font)
-    tw, th = bb[2] - bb[0], bb[3] - bb[1]
-    tx = (w - tw) / 2
-    ty = h - th - 20
+    tx = (w - (bb[2] - bb[0])) / 2
+    ty = h - (bb[3] - bb[1]) - 20
     for ox, oy in ((-2, -2), (2, -2), (-2, 2), (2, 2), (0, -2), (0, 2), (-2, 0), (2, 0)):
         draw.multiline_text((tx + ox, ty + oy), full, font=font, fill=(0, 0, 0, 255), align="center")
     draw.multiline_text((tx, ty), full, font=font, fill=(255, 255, 255, 255), align="center")
@@ -46,8 +45,7 @@ async def _to_webp(data: bytes) -> BytesIO:
     img = Image.open(BytesIO(data)).convert("RGBA")
     img.thumbnail((512, 512), Image.LANCZOS)
     canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
-    offset = ((512 - img.width) // 2, (512 - img.height) // 2)
-    canvas.paste(img, offset)
+    canvas.paste(img, ((512 - img.width) // 2, (512 - img.height) // 2))
     out = BytesIO()
     canvas.save(out, "WEBP")
     out.seek(0)
@@ -79,13 +77,14 @@ async def mmf_cmd(client: Client, ctx: Message):
     replied = ctx.reply_to_message
     if not any([replied.sticker, replied.photo, replied.document]):
         return await ctx.reply_text("❌ Reply to a sticker or photo.", parse_mode=enums.ParseMode.HTML)
+    if replied.sticker and (replied.sticker.is_animated or replied.sticker.is_video):
+        return await ctx.reply_text("❌ Only static stickers and images are supported.", parse_mode=enums.ParseMode.HTML)
     st = await ctx.reply_text("⏳", parse_mode=enums.ParseMode.HTML)
     try:
         f = await client.download_media(replied, in_memory=True)
         buf = await _text_on_sticker(f.getvalue(), text)
         await ctx.reply_sticker(buf)
     except Exception as e:
-        print(e)
         await ctx.reply_text(f"⚠️ <code>{e}</code>", parse_mode=enums.ParseMode.HTML)
     finally:
         try:
@@ -120,19 +119,17 @@ async def kang_cmd(client: Client, ctx: Message):
         if is_animated:
             buf = BytesIO(data)
             buf.seek(0)
-            buf.name = "sticker.tgs"
             mime, fname = "application/x-tgsticker", "sticker.tgs"
         elif is_video:
             buf = BytesIO(data)
             buf.seek(0)
-            buf.name = "sticker.webm"
             mime, fname = "video/webm", "sticker.webm"
         else:
             buf = await _to_webp(data)
             mime, fname = "image/webp", "sticker.webp"
 
+        buf.name = fname
         doc = await _upload_sticker(client, buf, mime, fname)
-        user_peer = await client.resolve_peer(me.id)
         item = raw.types.InputStickerSetItem(document=doc, emoji=emoji)
 
         try:
@@ -142,25 +139,24 @@ async def kang_cmd(client: Client, ctx: Message):
                     sticker=item,
                 )
             )
-            msg = "Added to"
+            action = "Added to"
         except (StickersetInvalid, BadRequest):
             await client.invoke(
                 raw.functions.stickers.CreateStickerSet(
-                    user_id=user_peer,
+                    user_id=raw.types.InputUserSelf(),
                     title=pack_title,
                     short_name=pack_name,
                     stickers=[item],
                 )
             )
-            msg = "Created"
+            action = "Created"
 
         await ctx.reply_text(
-            f"✅ {msg}: <a href='https://t.me/addstickers/{pack_name}'>Open Pack</a>",
+            f"✅ {action}: <a href='https://t.me/addstickers/{pack_name}'>Open Pack</a>",
             parse_mode=enums.ParseMode.HTML,
             disable_web_page_preview=True,
         )
     except Exception as e:
-        print(e)
         await ctx.reply_text(f"⚠️ <code>{e}</code>", parse_mode=enums.ParseMode.HTML)
     finally:
         try:
