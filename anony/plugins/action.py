@@ -689,23 +689,23 @@ _HELP_MENU = InlineKeyboardMarkup([
         InlineKeyboardButton("Silent Ban", callback_data="mh_sban",     style=ButtonStyle.PRIMARY),
     ],
     [
-        InlineKeyboardButton("Mute",       callback_data="mh_mute",     style=ButtonStyle.SECONDARY),
-        InlineKeyboardButton("Temp Mute",  callback_data="mh_tmute",    style=ButtonStyle.SECONDARY),
-        InlineKeyboardButton("Kick",       callback_data="mh_kick",     style=ButtonStyle.SECONDARY),
+        InlineKeyboardButton("Mute",       callback_data="mh_mute",     style=ButtonStyle.SUCCESS),
+        InlineKeyboardButton("Temp Mute",  callback_data="mh_tmute",    style=ButtonStyle.SUCCESS),
+        InlineKeyboardButton("Kick",       callback_data="mh_kick",     style=ButtonStyle.SUCCESS),
     ],
     [
-        InlineKeyboardButton("Warn",       callback_data="mh_warn",     style=ButtonStyle.SECONDARY),
-        InlineKeyboardButton("Dban",       callback_data="mh_dban",     style=ButtonStyle.SECONDARY),
+        InlineKeyboardButton("Warn",       callback_data="mh_warn",     style=ButtonStyle.SUCCESS),
+        InlineKeyboardButton("Dban",       callback_data="mh_dban",     style=ButtonStyle.SUCCESS),
         InlineKeyboardButton("Overview",   callback_data="mh_overview", style=ButtonStyle.PRIMARY),
     ],
     [
-        InlineKeyboardButton("✕ Close",    callback_data="mh_close",    style=ButtonStyle.DESTRUCTIVE),
+        InlineKeyboardButton("✕ Close",    callback_data="mh_close",    style=ButtonStyle.DNAGER),
     ],
 ])
 
 _BACK_KB = InlineKeyboardMarkup([[
-    InlineKeyboardButton("Back",     callback_data="mh_menu",  style=ButtonStyle.SECONDARY),
-    InlineKeyboardButton("✕ Close",  callback_data="mh_close", style=ButtonStyle.DESTRUCTIVE),
+    InlineKeyboardButton("Back",     callback_data="mh_menu",  style=ButtonStyle.SUCCESS),
+    InlineKeyboardButton("✕ Close",  callback_data="mh_close", style=ButtonStyle.DANGER),
 ]])
 
 _HELP_DATA: Dict[str, str] = {
