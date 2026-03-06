@@ -663,19 +663,19 @@ async def unwarn_cb(_, cq: CallbackQuery):
 
 _HELP_MENU = InlineKeyboardMarkup([
     [
-        InlineKeyboardButton("Ban",        callback_data="mh_ban",      style=ButtonStyle.PRIMARY),
-        InlineKeyboardButton("Temp Ban",   callback_data="mh_tban",     style=ButtonStyle.PRIMARY),
-        InlineKeyboardButton("Silent Ban", callback_data="mh_sban",     style=ButtonStyle.PRIMARY),
+        InlineKeyboardButton("Ban",        callback_data="mh_ban"),
+        InlineKeyboardButton("Temp Ban",   callback_data="mh_tban"),
+        InlineKeyboardButton("Silent Ban", callback_data="mh_sban"),
     ],
     [
-        InlineKeyboardButton("Mute",       callback_data="mh_mute",     style=ButtonStyle.SUCCESS),
-        InlineKeyboardButton("Temp Mute",  callback_data="mh_tmute",    style=ButtonStyle.SUCCESS),
-        InlineKeyboardButton("Kick",       callback_data="mh_kick",     style=ButtonStyle.SUCCESS),
+        InlineKeyboardButton("Mute",       callback_data="mh_mute"),
+        InlineKeyboardButton("Temp Mute",  callback_data="mh_tmute"),
+        InlineKeyboardButton("Kick",       callback_data="mh_kick"),
     ],
     [
-        InlineKeyboardButton("Warn",       callback_data="mh_warn",     style=ButtonStyle.SUCCESS),
-        InlineKeyboardButton("Dban",       callback_data="mh_dban",     style=ButtonStyle.SUCCESS),
-        InlineKeyboardButton("Overview",   callback_data="mh_overview", style=ButtonStyle.PRIMARY),
+        InlineKeyboardButton("Warn",       callback_data="mh_warn"),
+        InlineKeyboardButton("Dban",       callback_data="mh_dban"),
+        InlineKeyboardButton("Overview",   callback_data="mh_overview"),
     ],
     [
         InlineKeyboardButton("✕ Close",    callback_data="mh_close",    style=ButtonStyle.DANGER),
