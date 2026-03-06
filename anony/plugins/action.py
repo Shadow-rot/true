@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Optional, Dict, List
-from collections import defaultdict
+from typing import Optional, Dict
 
 import pytz
 from pyrogram import filters, enums
@@ -29,9 +28,9 @@ from pyrogram.errors import (
     UsernameInvalid,
 )
 
-from anony import app, config
-OWNER_ID = 5147822244
+from anony import app, db
 
+OWNER_ID = 5147822244
 KOLKATA_TZ = pytz.timezone("Asia/Kolkata")
 
 
@@ -62,13 +61,6 @@ class Target:
     user:     User
     reason:   Optional[str] = None
     duration: Optional[int] = None
-
-
-@dataclass
-class WarnData:
-    count:     int = 0
-    reasons:   List[str] = field(default_factory=list)
-    last_warn: Optional[datetime] = None
 
 
 class Cache:
@@ -126,37 +118,6 @@ class DurationParser:
         if sec < 86400:
             return f"{sec // 3600}h"
         return f"{sec // 86400}d"
-
-
-class WarnSystem:
-    _data: Dict[str, WarnData] = defaultdict(WarnData)
-    MAX = 3
-
-    @classmethod
-    def add(cls, chat_id: int, user_id: int, reason: str) -> WarnData:
-        wd = cls._data[f"{chat_id}:{user_id}"]
-        wd.count += 1
-        wd.reasons.append(reason or "No reason")
-        wd.last_warn = datetime.now(KOLKATA_TZ)
-        return wd
-
-    @classmethod
-    def remove(cls, chat_id: int, user_id: int) -> Optional[WarnData]:
-        wd = cls._data.get(f"{chat_id}:{user_id}")
-        if wd and wd.count > 0:
-            wd.count -= 1
-            if wd.reasons:
-                wd.reasons.pop()
-            return wd
-        return None
-
-    @classmethod
-    def get(cls, chat_id: int, user_id: int) -> WarnData:
-        return cls._data.get(f"{chat_id}:{user_id}", WarnData())
-
-    @classmethod
-    def reset(cls, chat_id: int, user_id: int):
-        cls._data.pop(f"{chat_id}:{user_id}", None)
 
 
 def _now() -> datetime:
@@ -311,7 +272,7 @@ def _action_text(
     admin: User,
     reason: Optional[str] = None,
     duration: Optional[int] = None,
-    warn: Optional[WarnData] = None,
+    warn: Optional[dict] = None,
 ) -> str:
     lines = [
         f"<blockquote><b>{action.value} EXECUTED</b></blockquote>\n",
@@ -325,9 +286,10 @@ def _action_text(
             f"<b>Duration:</b> <code>{DurationParser.fmt(duration)}</code>",
             f"<b>Expires:</b> <code>{expiry}</code>",
         ]
-    if warn:
-        lines.append(f"<b>Warns:</b> <code>{warn.count}/{WarnSystem.MAX}</code>")
-        if warn.count >= WarnSystem.MAX:
+    if warn is not None:
+        count = warn.get("count", 0)
+        lines.append(f"<b>Warns:</b> <code>{count}/{db.warnsdb.MAX_WARNS if hasattr(db.warnsdb, 'MAX_WARNS') else 3}</code>")
+        if count >= 3:
             lines.append("<b>Max warns reached — auto ban triggered</b>")
     if reason:
         lines.append(f"<b>Reason:</b> <i>{reason}</i>")
@@ -601,16 +563,16 @@ async def warn_cmd(_, m: Message):
     err = await _validate(m, t.user, need_bot_admin=False)
     if err:
         return await m.reply_text(err, parse_mode=enums.ParseMode.HTML)
-    wd = WarnSystem.add(m.chat.id, t.user.id, t.reason or "No reason")
+    wd = await db.warn_add(m.chat.id, t.user.id, t.reason or "No reason")
     await m.reply_text(
         _action_text(Action.WARN, t.user, m.from_user, t.reason, warn=wd),
         reply_markup=_unwarn_kb(m.chat.id, t.user.id),
         parse_mode=enums.ParseMode.HTML,
     )
-    if wd.count >= WarnSystem.MAX:
+    if wd.get("count", 0) >= 3:
         try:
             await app.ban_chat_member(m.chat.id, t.user.id)
-            WarnSystem.reset(m.chat.id, t.user.id)
+            await db.warn_reset(m.chat.id, t.user.id)
             Cache.drop(f"is_admin:{m.chat.id}:{t.user.id}")
         except RPCError:
             pass
@@ -623,8 +585,8 @@ async def unwarn_cmd(_, m: Message):
         return
     if not await _caller_is_admin(m):
         return await m.reply_text(_err_text(Err.NO_PERMISSION), parse_mode=enums.ParseMode.HTML)
-    wd = WarnSystem.remove(m.chat.id, t.user.id)
-    if wd:
+    wd = await db.warn_remove(m.chat.id, t.user.id)
+    if wd is not None:
         await m.reply_text(
             _action_text(Action.UNWARN, t.user, m.from_user, warn=wd),
             parse_mode=enums.ParseMode.HTML,
@@ -641,14 +603,16 @@ async def warns_cmd(_, m: Message):
     t = await _resolve_user(m)
     if not t:
         return
-    wd = WarnSystem.get(m.chat.id, t.user.id)
+    wd = await db.warn_get(m.chat.id, t.user.id)
+    count = wd.get("count", 0)
+    reasons = wd.get("reasons", [])
     text = (
         f"<blockquote><b>WARN HISTORY</b></blockquote>\n\n"
         f"<b>User:</b> {t.user.mention}\n"
-        f"<b>Total:</b> <code>{wd.count}/{WarnSystem.MAX}</code>\n"
+        f"<b>Total:</b> <code>{count}/3</code>\n"
     )
-    if wd.reasons:
-        text += "\n<b>Reasons:</b>\n" + "\n".join(f"{i}. {r}" for i, r in enumerate(wd.reasons, 1))
+    if reasons:
+        text += "\n<b>Reasons:</b>\n" + "\n".join(f"{i}. {r}" for i, r in enumerate(reasons, 1))
     await m.reply_text(text, parse_mode=enums.ParseMode.HTML)
 
 
@@ -683,12 +647,12 @@ async def unwarn_cb(_, cq: CallbackQuery):
         return await cq.answer("Cannot identify user", show_alert=True)
     if not await _can_restrict(chat_id, cq.from_user.id):
         return await cq.answer("You cannot remove warnings", show_alert=True)
-    wd = WarnSystem.remove(chat_id, user_id)
-    if wd:
+    wd = await db.warn_remove(chat_id, user_id)
+    if wd is not None:
         await cq.message.edit_text(
             f"<blockquote><b>WARN REMOVED</b></blockquote>\n\n"
             f"<b>User ID:</b> <code>{user_id}</code>\n"
-            f"<b>Remaining:</b> <code>{wd.count}/{WarnSystem.MAX}</code>\n"
+            f"<b>Remaining:</b> <code>{wd.get('count', 0)}/3</code>\n"
             f"<b>By:</b> {cq.from_user.mention}\n"
             f"<b>Time:</b> <code>{_ts()}</code>",
             parse_mode=enums.ParseMode.HTML,

@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 # This file is part of AnonXMusic
 
+from datetime import datetime, timezone
 from random import randint
 from time import time
 from uuid import uuid4
@@ -12,6 +13,7 @@ from anony import config, logger, userbot
 
 MAX_PLAYLISTS = 10
 MAX_TRACKS = 200
+MAX_WARNS = 3
 
 
 class MongoDB:
@@ -45,6 +47,7 @@ class MongoDB:
 
         self.playlistsdb = self.db.playlists
         self.tracksdb = self.db.playlist_tracks
+        self.warnsdb = self.db.warns
 
     async def connect(self) -> None:
         try:
@@ -351,6 +354,38 @@ class MongoDB:
         except Exception:
             return 0
 
+    # ── WARNS ─────────────────────────────────────────────────────────────────
+
+    async def warn_add(self, chat_id: int, user_id: int, reason: str) -> dict:
+        key = f"{chat_id}:{user_id}"
+        await self.warnsdb.update_one(
+            {"_id": key},
+            {
+                "$inc": {"count": 1},
+                "$push": {"reasons": reason or "No reason"},
+                "$set": {"last_warn": datetime.now(timezone.utc)},
+            },
+            upsert=True,
+        )
+        return await self.warn_get(chat_id, user_id)
+
+    async def warn_remove(self, chat_id: int, user_id: int) -> dict | None:
+        doc = await self.warnsdb.find_one({"_id": f"{chat_id}:{user_id}"})
+        if not doc or doc.get("count", 0) == 0:
+            return None
+        await self.warnsdb.update_one(
+            {"_id": f"{chat_id}:{user_id}"},
+            {"$inc": {"count": -1}, "$pop": {"reasons": 1}},
+        )
+        return await self.warn_get(chat_id, user_id)
+
+    async def warn_get(self, chat_id: int, user_id: int) -> dict:
+        doc = await self.warnsdb.find_one({"_id": f"{chat_id}:{user_id}"})
+        return doc if doc else {"count": 0, "reasons": []}
+
+    async def warn_reset(self, chat_id: int, user_id: int) -> None:
+        await self.warnsdb.delete_one({"_id": f"{chat_id}:{user_id}"})
+
     # ── MIGRATION / STARTUP ───────────────────────────────────────────────────
 
     async def migrate_coll(self) -> None:
@@ -398,4 +433,5 @@ class MongoDB:
         await self.get_logger()
         await self.playlistsdb.create_index([("user_id", 1), ("name", 1)], unique=True)
         await self.tracksdb.create_index([("playlist_id", 1)])
+        await self.warnsdb.create_index([("_id", 1)])
         logger.info("Database cache loaded.")
