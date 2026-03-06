@@ -87,7 +87,7 @@ class Inline:
             ]
 
             buttons = [
-                self._btn(_lang[f"help_{i}"], f"help {cb}", ButtonStyle.PRIMARY)
+                self._btn(_lang[f"help_{i}"], f"help {cb}")
                 for i, cb in enumerate(cbs)
             ]
 
