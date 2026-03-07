@@ -6,15 +6,15 @@ from typing import Optional
 from pyrogram import types, enums
 from py_yt import VideosSearch
 
-from anony import app, logger
+from anony import app
 from anony.core.fallen_api import FallenApi
 
-# ── Shared state ──────────────────────────────────────────────────────────────
 fallen = FallenApi()
 
-_meta: dict[str, dict]  = {}   # vid_id → {title, performer, duration}
-_fid:  dict[str, str]   = {}   # vid_id → telegram file_id  (persistent cache)
-_lock: dict[str, asyncio.Lock] = {}  # per-video download lock (deduplicate)
+_meta: dict[str, dict] = {}
+_fid:  dict[str, str]  = {}
+_lock: dict[str, asyncio.Lock] = {}
+_pre:  set[str] = set()  # video_ids already being pre-fetched
 
 
 def _get_lock(video_id: str) -> asyncio.Lock:
@@ -24,15 +24,29 @@ def _get_lock(video_id: str) -> asyncio.Lock:
 
 
 def _is_cached(video_id: str) -> bool:
-    """True when we already have a Telegram file_id OR a local file on disk."""
     return video_id in _fid or bool(fallen._check_cached_file(video_id))
 
 
-# ── Inline search ─────────────────────────────────────────────────────────────
+async def _prefetch(video_id: str) -> None:
+    """Download and cache a track silently in the background."""
+    if video_id in _pre or _is_cached(video_id):
+        return
+    _pre.add(video_id)
+    try:
+        async with _get_lock(video_id):
+            if _is_cached(video_id):
+                return
+            url = f"https://www.youtube.com/watch?v={video_id}"
+            await fallen.download_track(url)
+    except Exception:
+        pass
+    finally:
+        _pre.discard(video_id)
+
+
 @app.on_inline_query()
 async def inline_search(_, query: types.InlineQuery):
     text = query.query.strip()
-    uid  = query.from_user.id
 
     if not text:
         await app.answer_inline_query(
@@ -43,14 +57,12 @@ async def inline_search(_, query: types.InlineQuery):
         )
         return
 
-    logger.info(f"[INLINE] query='{text}' from={uid}")
-
     try:
         raw     = await VideosSearch(text, limit=10).next()
         results = raw.get("result", [])
-        logger.info(f"[INLINE] {len(results)} results for '{text}'")
 
         answers: list[types.InlineQueryResultArticle] = []
+        ids_to_prefetch: list[str] = []
 
         for v in results:
             vid_id   = v.get("id", "")
@@ -62,7 +74,6 @@ async def inline_search(_, query: types.InlineQuery):
             if not vid_id:
                 continue
 
-            # Store meta for chosen-result handler
             _meta[vid_id] = {
                 "title":     title,
                 "performer": channel,
@@ -70,6 +81,7 @@ async def inline_search(_, query: types.InlineQuery):
             }
 
             tag = "⚡" if _is_cached(vid_id) else "⬇️"
+            ids_to_prefetch.append(vid_id)
 
             answers.append(
                 types.InlineQueryResultArticle(
@@ -79,7 +91,7 @@ async def inline_search(_, query: types.InlineQuery):
                     input_message_content=types.InputTextMessageContent(
                         message_text=(
                             f"⏳ <b>{title[:60]}</b>\n"
-                            f"<i>Downloading…</i>"
+                            f"<i>Preparing audio…</i>"
                         ),
                         parse_mode=enums.ParseMode.HTML,
                         disable_web_page_preview=True,
@@ -88,7 +100,10 @@ async def inline_search(_, query: types.InlineQuery):
             )
 
         if answers:
+            # Reply to user instantly, then fire background prefetch for all results
             await app.answer_inline_query(query.id, results=answers, cache_time=0)
+            for vid_id in ids_to_prefetch:
+                asyncio.create_task(_prefetch(vid_id))
         else:
             await app.answer_inline_query(
                 query.id, results=[],
@@ -97,8 +112,7 @@ async def inline_search(_, query: types.InlineQuery):
                 cache_time=5,
             )
 
-    except Exception as e:
-        logger.error(f"[INLINE] error: {e}", exc_info=True)
+    except Exception:
         try:
             await app.answer_inline_query(
                 query.id, results=[],
@@ -110,7 +124,6 @@ async def inline_search(_, query: types.InlineQuery):
             pass
 
 
-# ── Chosen result handler ─────────────────────────────────────────────────────
 @app.on_chosen_inline_result()
 async def on_chosen(client, result: types.ChosenInlineResult):
     video_id   = result.result_id
@@ -122,17 +135,13 @@ async def on_chosen(client, result: types.ChosenInlineResult):
     title     = meta.get("title", "Unknown Title")
     performer = meta.get("performer", "Unknown Artist")
 
-    logger.info(f"[ILDL] chosen video_id={video_id} title='{title}'")
-
-    # ── Fast path: already have Telegram file_id ──────────────────────────────
+    # Fast path: Telegram file_id already in memory
     if video_id in _fid:
         if await _send_via_file_id(client, video_id, inline_mid, title, performer):
             return
-        # file_id stale — fall through to re-download
 
-    # ── Serialise parallel downloads for the same video ───────────────────────
     async with _get_lock(video_id):
-        # Re-check after acquiring lock (another coroutine may have finished)
+        # Re-check after lock — prefetch may have landed while we waited
         if video_id in _fid:
             if await _send_via_file_id(client, video_id, inline_mid, title, performer):
                 return
@@ -140,15 +149,9 @@ async def on_chosen(client, result: types.ChosenInlineResult):
         await _download_and_send(client, video_id, inline_mid, title, performer)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
 async def _send_via_file_id(
-    client,
-    video_id: str,
-    inline_mid: str,
-    title: str,
-    performer: str,
+    client, video_id: str, inline_mid: str, title: str, performer: str
 ) -> bool:
-    """Try to send audio using a cached Telegram file_id. Returns True on success."""
     try:
         await client.edit_inline_media(
             inline_message_id=inline_mid,
@@ -158,39 +161,30 @@ async def _send_via_file_id(
                 performer=performer,
             ),
         )
-        logger.info(f"[ILDL] ⚡ instant send via file_id: '{title}'")
         return True
-    except Exception as e:
-        logger.warning(f"[ILDL] file_id stale, evicting ({e})")
+    except Exception:
         _fid.pop(video_id, None)
         return False
 
 
 async def _download_and_send(
-    client,
-    video_id: str,
-    inline_mid: str,
-    title: str,
-    performer: str,
+    client, video_id: str, inline_mid: str, title: str, performer: str
 ) -> None:
     url = f"https://www.youtube.com/watch?v={video_id}"
 
     try:
-        # ── 1. FallenApi (fast CDN / Telegram source) ─────────────────────
+        # 1. FallenApi — CDN / Telegram fast path
         file_path: Optional[str] = await fallen.download_track(url)
-        logger.info(f"[ILDL] fallen → {file_path!r}")
 
-        # ── 2. yt-dlp fallback (lazy import keeps startup fast) ───────────
+        # 2. yt-dlp fallback (lazy import to avoid circular at startup)
         if not file_path:
-            from anony.core.youtube import YouTube  # local import avoids circular
+            from anony.core.youtube import YouTube
             file_path = await YouTube().download(video_id, video=False)
-            logger.info(f"[ILDL] yt-dlp fallback → {file_path!r}")
 
         if not file_path:
             await _edit_caption(client, inline_mid, "❌ <b>Download failed.</b>")
             return
 
-        # ── 3. Upload audio ───────────────────────────────────────────────
         msg = await client.edit_inline_media(
             inline_message_id=inline_mid,
             media=types.InputMediaAudio(
@@ -200,15 +194,11 @@ async def _download_and_send(
             ),
         )
 
-        # Cache file_id for instant future delivery
+        # Persist file_id for zero-cost future delivery
         if msg and hasattr(msg, "audio") and msg.audio:
             _fid[video_id] = msg.audio.file_id
-            logger.info(f"[ILDL] ✅ cached file_id for '{title}'")
-
-        logger.info(f"[ILDL] done: '{title}'")
 
     except Exception as e:
-        logger.error(f"[ILDL] fatal: {e}", exc_info=True)
         await _edit_caption(client, inline_mid, f"❌ <code>{e}</code>")
 
 
