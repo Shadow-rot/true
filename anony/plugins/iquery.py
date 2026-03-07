@@ -1,49 +1,172 @@
 from __future__ import annotations
 
 import asyncio
+import urllib.parse
+import re
+import uuid
+from pathlib import Path
 from typing import Optional
 
 from pyrogram import types, enums
 from py_yt import VideosSearch
+import aiohttp
 
-from anony import app
-from anony.core.fallen_api import FallenApi
+from anony import app, config
 
-fallen = FallenApi()
+# ── Persistent HTTP session (created once, reused forever) ────────────────────
+_connector = aiohttp.TCPConnector(
+    limit=50,                # max simultaneous connections
+    ttl_dns_cache=300,       # cache DNS for 5 min
+    use_dns_cache=True,
+    keepalive_timeout=60,
+)
+_session: Optional[aiohttp.ClientSession] = None
 
-_meta: dict[str, dict] = {}
-_fid:  dict[str, str]  = {}
+def _get_session() -> aiohttp.ClientSession:
+    global _session
+    if _session is None or _session.closed:
+        _session = aiohttp.ClientSession(
+            connector=_connector,
+            connector_owner=False,
+            timeout=aiohttp.ClientTimeout(total=20, connect=5),
+            headers={
+                "X-API-Key": config.API_KEY,
+                "Accept":    "application/json",
+            },
+        )
+    return _session
+
+# ── Download dir ──────────────────────────────────────────────────────────────
+_DL_DIR = Path("downloads")
+_DL_DIR.mkdir(exist_ok=True)
+
+_API_BASE = None   # resolved once below
+
+def _api_base() -> str:
+    global _API_BASE
+    if _API_BASE is None:
+        _API_BASE = config.API_URL.rstrip("/")
+    return _API_BASE
+
+# ── In-memory caches ──────────────────────────────────────────────────────────
+_meta: dict[str, dict]        = {}
+_fid:  dict[str, str]         = {}   # vid_id → telegram file_id
+_path: dict[str, str]         = {}   # vid_id → local file path
 _lock: dict[str, asyncio.Lock] = {}
-_pre:  set[str] = set()  # video_ids already being pre-fetched
+_pre:  set[str]               = set()
 
+_EXT_RE   = re.compile(r'\.(\w{2,4})(?:\?|$)')
+_VID_RE   = re.compile(
+    r'(?:youtube\.com/(?:watch\?v=|shorts/|embed/)|youtu\.be/)([A-Za-z0-9_-]{11})'
+)
 
-def _get_lock(video_id: str) -> asyncio.Lock:
-    if video_id not in _lock:
-        _lock[video_id] = asyncio.Lock()
-    return _lock[video_id]
+def _get_lock(vid: str) -> asyncio.Lock:
+    if vid not in _lock:
+        _lock[vid] = asyncio.Lock()
+    return _lock[vid]
 
+def _disk_cached(vid: str) -> Optional[str]:
+    for ext in ("webm", "mp3", "m4a", "opus", "mp4"):
+        p = _DL_DIR / f"{vid}.{ext}"
+        if p.is_file():
+            return str(p)
+    return None
 
-def _is_cached(video_id: str) -> bool:
-    return video_id in _fid or bool(fallen._check_cached_file(video_id))
+def _is_ready(vid: str) -> bool:
+    return vid in _fid or vid in _path or bool(_disk_cached(vid))
 
-
-async def _prefetch(video_id: str) -> None:
-    """Download and cache a track silently in the background."""
-    if video_id in _pre or _is_cached(video_id):
-        return
-    _pre.add(video_id)
+# ── Core: direct API call ─────────────────────────────────────────────────────
+async def _api_get_track(yt_url: str) -> Optional[str]:
+    """
+    Hit /api/track directly and return a CDN/download URL.
+    Single attempt, no retries — speed over resilience for prefetch.
+    """
+    endpoint = f"{_api_base()}/api/track?url={urllib.parse.quote(yt_url, safe='')}"
     try:
-        async with _get_lock(video_id):
-            if _is_cached(video_id):
+        async with _get_session().get(endpoint) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json(content_type=None)
+            return data.get("cdnurl") or data.get("url") or None
+    except Exception:
+        return None
+
+async def _download_cdn(cdn_url: str, vid: str) -> Optional[str]:
+    """Stream CDN URL straight to disk using the shared session."""
+    m   = _EXT_RE.search(cdn_url)
+    ext = m.group(1) if m else "mp3"
+    out = _DL_DIR / f"{vid}.{ext}"
+
+    if out.is_file():
+        return str(out)
+
+    try:
+        async with _get_session().get(cdn_url) as resp:
+            if resp.status != 200:
+                return None
+            with open(out, "wb") as f:
+                async for chunk in resp.content.iter_chunked(128 * 1024):
+                    if chunk:
+                        f.write(chunk)
+        return str(out)
+    except Exception:
+        out.unlink(missing_ok=True)
+        return None
+
+async def _fetch_and_store(vid: str) -> Optional[str]:
+    """Full pipeline: cache check → API → CDN download. Returns local path."""
+    # 1. memory path cache
+    if vid in _path:
+        return _path[vid]
+
+    # 2. disk cache
+    cached = _disk_cached(vid)
+    if cached:
+        _path[vid] = cached
+        return cached
+
+    # 3. FallenAPI → CDN download
+    url     = f"https://www.youtube.com/watch?v={vid}"
+    cdn_url = await _api_get_track(url)
+    if not cdn_url:
+        return None
+
+    # Handle Telegram message links (t.me/channel/msg_id)
+    tg = re.match(r"https?://t\.me/([^/]+)/(\d+)", cdn_url)
+    if tg:
+        chat, msg_id = tg.groups()
+        try:
+            msg  = await app.get_messages(chat_id=chat, message_ids=int(msg_id))
+            dest = str(_DL_DIR / f"{vid}.mp3")
+            fp   = await msg.download(file_name=dest)
+            if fp:
+                _path[vid] = fp
+            return fp
+        except Exception:
+            return None
+
+    # CDN download
+    fp = await _download_cdn(cdn_url, vid)
+    if fp:
+        _path[vid] = fp
+    return fp
+
+# ── Background prefetch ───────────────────────────────────────────────────────
+async def _prefetch(vid: str) -> None:
+    if vid in _pre or _is_ready(vid):
+        return
+    _pre.add(vid)
+    try:
+        async with _get_lock(vid):
+            if _is_ready(vid):
                 return
-            url = f"https://www.youtube.com/watch?v={video_id}"
-            await fallen.download_track(url)
+            await _fetch_and_store(vid)
     except Exception:
         pass
     finally:
-        _pre.discard(video_id)
+        _pre.discard(vid)
 
-
+# ── Inline search ─────────────────────────────────────────────────────────────
 @app.on_inline_query()
 async def inline_search(_, query: types.InlineQuery):
     text = query.query.strip()
@@ -62,37 +185,28 @@ async def inline_search(_, query: types.InlineQuery):
         results = raw.get("result", [])
 
         answers: list[types.InlineQueryResultArticle] = []
-        ids_to_prefetch: list[str] = []
+        to_fetch: list[str] = []
 
         for v in results:
-            vid_id   = v.get("id", "")
+            vid      = v.get("id", "")
             title    = v.get("title", "Unknown")
             duration = v.get("duration", "N/A")
             views    = v.get("viewCount", {}).get("short", "N/A")
             channel  = v.get("channel", {}).get("name", "Unknown")
-
-            if not vid_id:
+            if not vid:
                 continue
 
-            _meta[vid_id] = {
-                "title":     title,
-                "performer": channel,
-                "duration":  duration,
-            }
-
-            tag = "⚡" if _is_cached(vid_id) else "⬇️"
-            ids_to_prefetch.append(vid_id)
+            _meta[vid] = {"title": title, "performer": channel}
+            tag = "⚡" if _is_ready(vid) else "⬇️"
+            to_fetch.append(vid)
 
             answers.append(
                 types.InlineQueryResultArticle(
-                    id=vid_id,
+                    id=vid,
                     title=f"{tag} {title[:60]}",
                     description=f"🎵 {duration}  •  👁 {views}  •  {channel}",
                     input_message_content=types.InputTextMessageContent(
-                        message_text=(
-                            f"⏳ <b>{title[:60]}</b>\n"
-                            f"<i>Preparing audio…</i>"
-                        ),
+                        message_text=f"⏳ <b>{title[:60]}</b>\n<i>Preparing…</i>",
                         parse_mode=enums.ParseMode.HTML,
                         disable_web_page_preview=True,
                     ),
@@ -100,10 +214,10 @@ async def inline_search(_, query: types.InlineQuery):
             )
 
         if answers:
-            # Reply to user instantly, then fire background prefetch for all results
+            # Send results first — user sees them instantly
             await app.answer_inline_query(query.id, results=answers, cache_time=0)
-            for vid_id in ids_to_prefetch:
-                asyncio.create_task(_prefetch(vid_id))
+            # Fire all prefetches concurrently
+            asyncio.gather(*[_prefetch(vid) for vid in to_fetch], return_exceptions=True)
         else:
             await app.answer_inline_query(
                 query.id, results=[],
@@ -111,7 +225,6 @@ async def inline_search(_, query: types.InlineQuery):
                 switch_pm_parameter="start",
                 cache_time=5,
             )
-
     except Exception:
         try:
             await app.answer_inline_query(
@@ -123,86 +236,73 @@ async def inline_search(_, query: types.InlineQuery):
         except Exception:
             pass
 
-
+# ── Chosen result ─────────────────────────────────────────────────────────────
 @app.on_chosen_inline_result()
 async def on_chosen(client, result: types.ChosenInlineResult):
-    video_id   = result.result_id
+    vid        = result.result_id
     inline_mid = result.inline_message_id
     if not inline_mid:
         return
 
-    meta      = _meta.get(video_id, {})
+    meta      = _meta.get(vid, {})
     title     = meta.get("title", "Unknown Title")
     performer = meta.get("performer", "Unknown Artist")
 
-    # Fast path: Telegram file_id already in memory
-    if video_id in _fid:
-        if await _send_via_file_id(client, video_id, inline_mid, title, performer):
+    # ── instant path: telegram file_id ────────────────────────────────────────
+    if vid in _fid:
+        if await _send_fid(client, vid, inline_mid, title, performer):
             return
 
-    async with _get_lock(video_id):
-        # Re-check after lock — prefetch may have landed while we waited
-        if video_id in _fid:
-            if await _send_via_file_id(client, video_id, inline_mid, title, performer):
+    # ── serialise: if prefetch is running, wait on same lock ──────────────────
+    async with _get_lock(vid):
+        if vid in _fid:
+            if await _send_fid(client, vid, inline_mid, title, performer):
                 return
 
-        await _download_and_send(client, video_id, inline_mid, title, performer)
+        # File may already be on disk from prefetch
+        fp = _path.get(vid) or _disk_cached(vid)
 
+        # If not ready yet, download now (with yt-dlp fallback)
+        if not fp:
+            fp = await _fetch_and_store(vid)
 
-async def _send_via_file_id(
-    client, video_id: str, inline_mid: str, title: str, performer: str
-) -> bool:
-    try:
-        await client.edit_inline_media(
-            inline_message_id=inline_mid,
-            media=types.InputMediaAudio(
-                media=_fid[video_id],
-                title=title,
-                performer=performer,
-            ),
-        )
-        return True
-    except Exception:
-        _fid.pop(video_id, None)
-        return False
+        if not fp:
+            # Last resort: yt-dlp
+            try:
+                from anony.core.youtube import YouTube
+                fp = await YouTube().download(vid, video=False)
+            except Exception:
+                pass
 
-
-async def _download_and_send(
-    client, video_id: str, inline_mid: str, title: str, performer: str
-) -> None:
-    url = f"https://www.youtube.com/watch?v={video_id}"
-
-    try:
-        # 1. FallenApi — CDN / Telegram fast path
-        file_path: Optional[str] = await fallen.download_track(url)
-
-        # 2. yt-dlp fallback (lazy import to avoid circular at startup)
-        if not file_path:
-            from anony.core.youtube import YouTube
-            file_path = await YouTube().download(video_id, video=False)
-
-        if not file_path:
+        if not fp:
             await _edit_caption(client, inline_mid, "❌ <b>Download failed.</b>")
             return
 
+        await _upload(client, vid, inline_mid, fp, title, performer)
+
+async def _send_fid(client, vid, inline_mid, title, performer) -> bool:
+    try:
+        await client.edit_inline_media(
+            inline_message_id=inline_mid,
+            media=types.InputMediaAudio(media=_fid[vid], title=title, performer=performer),
+        )
+        return True
+    except Exception:
+        _fid.pop(vid, None)
+        return False
+
+async def _upload(client, vid, inline_mid, fp, title, performer) -> None:
+    try:
         msg = await client.edit_inline_media(
             inline_message_id=inline_mid,
-            media=types.InputMediaAudio(
-                media=file_path,
-                title=title,
-                performer=performer,
-            ),
+            media=types.InputMediaAudio(media=fp, title=title, performer=performer),
         )
-
-        # Persist file_id for zero-cost future delivery
         if msg and hasattr(msg, "audio") and msg.audio:
-            _fid[video_id] = msg.audio.file_id
-
+            _fid[vid] = msg.audio.file_id
     except Exception as e:
         await _edit_caption(client, inline_mid, f"❌ <code>{e}</code>")
 
-
-async def _edit_caption(client, inline_mid: str, text: str) -> None:
+async def _edit_caption(client, inline_mid, text) -> None:
     try:
         await client.edit_inline_caption(
             inline_message_id=inline_mid,
